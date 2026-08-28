@@ -6,7 +6,7 @@
 
 把下面这句话完整发给 Codex 或 WorkBuddy：
 
-> 请从 https://github.com/slbb1995/zsk-knowledge-base-skill 安装完整的 ZSK 知识库 Skill 组合。先阅读仓库 README，不覆盖任何已有同名目录；安装到你当前正在使用的 Skills 目录。安装后检查 zsk-router、zsk-ruku、zsk-zhishi、zsk-duibiao、zsk-profile 和 shared 是否齐全，并告诉我是否需要重新打开当前任务。
+> 请从 https://github.com/slbb1995/zsk-knowledge-base-skill 安装完整的 ZSK 知识库 Skill 组合及 MarkItDown 配套 Skill。先阅读仓库 README，不覆盖任何已有同名目录；安装到你当前正在使用的 Skills 目录，并补齐 MarkItDown 的 DOCX、PPTX、XLSX、PDF 转换依赖。安装后检查 zsk-router、zsk-ruku、zsk-zhishi、zsk-duibiao、zsk-profile、markitdown-skill 和 shared 是否齐全，并告诉我是否需要重新打开当前任务。
 
 安装完成后，重新打开一个任务，再发送：
 
@@ -27,7 +27,7 @@
 
 ```bash
 git clone https://github.com/slbb1995/zsk-knowledge-base-skill.git
-python3 zsk-knowledge-base-skill/install.py
+python3 zsk-knowledge-base-skill/install.py --install-markitdown
 ```
 
 安装到其他 Skills 目录：
@@ -46,12 +46,12 @@ python3 zsk-knowledge-base-skill/install.py --check
 
 ## 文档转换前置条件
 
-ZSK 不让大模型直接读取 Office 或 PDF。MD/TXT/CSV 可直接入库；DOCX、PPTX、XLSX、PDF、HTML、JSON 由 Microsoft MarkItDown 在本机转换为唯一正式 `readable.md`。
+ZSK 不让大模型直接读取 Office 或 PDF。安装包内含 `markitdown-skill`，它是必装配套能力但不是客户业务入口。MD/TXT/CSV 可直接入库；DOCX、PPTX、XLSX、PDF、HTML、JSON 由 Microsoft MarkItDown 在本机转换为唯一正式 `readable.md`。
 
 首次安装后，用最小格式集合安装并检查转换器；不使用 `markitdown[all]`，因为图片 OCR、音视频和联网扩展不属于当前版本：
 
 ```bash
-pipx install 'markitdown[docx,pdf,pptx,xlsx]==0.1.6'
+python3 zsk-knowledge-base-skill/install.py --install-markitdown
 python3 zsk-knowledge-base-skill/install.py --doctor
 ```
 
@@ -71,6 +71,7 @@ Doctor 未通过时，富文档会准确停止并进入 02；不会静默换用�
 - `zsk-zhishi`：把已确认资料整理为业务知识。
 - `zsk-duibiao`：只提炼外部参考的表达方法。
 - `zsk-profile`：整理主体确认事实、运营设定和候选素材。
+- `markitdown-skill`：必装的 Microsoft MarkItDown 转换说明与运行边界；供 ZSK 后台和独立文档转换复用，不是第二个入库入口。
 - `shared`：以上组件共用的合同、格式读取和飞书／Obsidian 适配代码。
 
 ## 第一次使用示例

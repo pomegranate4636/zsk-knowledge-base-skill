@@ -17,8 +17,10 @@ COMPONENTS = (
     "zsk-zhishi",
     "zsk-duibiao",
     "zsk-profile",
+    "markitdown-skill",
     "shared",
 )
+MARKITDOWN_SPEC = "markitdown[docx,pdf,pptx,xlsx]==0.1.6"
 
 
 def default_destination() -> Path:
@@ -62,6 +64,20 @@ def converter_version() -> str | None:
     except (OSError, subprocess.TimeoutExpired):
         return None
     return completed.stdout.strip() if completed.returncode == 0 and completed.stdout.strip() else None
+
+
+def install_converter() -> bool:
+    pipx = shutil.which("pipx")
+    if not pipx:
+        print("未找到 pipx，无法自动安装 MarkItDown。请先安装 pipx 后重试。", file=sys.stderr)
+        return False
+    command = (pipx, "inject", "--force", "markitdown", MARKITDOWN_SPEC) if converter_version() else (pipx, "install", MARKITDOWN_SPEC)
+    try:
+        completed = subprocess.run(command, timeout=180, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        print("MarkItDown 安装未完成。", file=sys.stderr)
+        return False
+    return completed.returncode == 0 and converter_version() is not None
 
 
 def install(source_root: Path, destination: Path) -> int:
@@ -109,6 +125,7 @@ def main() -> int:
     parser.add_argument("--dest", type=Path, default=default_destination(), help="目标 Skills 目录")
     parser.add_argument("--check", action="store_true", help="只检查目标目录，不写入")
     parser.add_argument("--doctor", action="store_true", help="检查完整组件与 MarkItDown 转换器，不写入")
+    parser.add_argument("--install-markitdown", action="store_true", help="安装或补齐 MarkItDown 最小格式依赖")
     args = parser.parse_args()
 
     destination = args.dest.expanduser().resolve()
@@ -127,7 +144,13 @@ def main() -> int:
         return 0 if not missing and version else 1
 
     source_root = Path(__file__).resolve().parent / "skills"
-    return install(source_root, destination)
+    result = install(source_root, destination)
+    if result != 0 or not args.install_markitdown:
+        return result
+    if not install_converter():
+        return 6
+    print("MarkItDown 已就绪：" + (converter_version() or "未知版本"))
+    return 0
 
 
 if __name__ == "__main__":
