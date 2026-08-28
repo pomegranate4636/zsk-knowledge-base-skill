@@ -1,0 +1,40 @@
+"""五个 Skill 共用的后端中立 Adapter 接口。"""
+
+from __future__ import annotations
+
+from typing import Protocol, Sequence
+
+from .contracts import (
+    AdapterResult,
+    AssetPayload,
+    BackendObjectRef,
+    Binding,
+    ExceptionRecord,
+    SourceRecord,
+)
+
+
+class KnowledgeBaseAdapter(Protocol):
+    def doctor(self) -> AdapterResult: ...
+
+    def resolve_binding(self, binding: Binding) -> AdapterResult: ...
+
+    def inspect_structure(self, binding: Binding) -> AdapterResult: ...
+
+    def create_skeleton(self, binding: Binding) -> AdapterResult: ...
+
+    def read_rules(self, binding: Binding) -> AdapterResult: ...
+
+    def store_original(self, binding: Binding, source: SourceRecord, payload: bytes) -> AdapterResult: ...
+
+    def store_readable(self, binding: Binding, source: SourceRecord, payload: bytes) -> AdapterResult: ...
+
+    def write_exception(self, binding: Binding, exception: ExceptionRecord) -> AdapterResult: ...
+
+    def write_knowledge_asset(self, binding: Binding, asset: AssetPayload) -> AdapterResult: ...
+
+    def write_method_asset(self, binding: Binding, asset: AssetPayload) -> AdapterResult: ...
+
+    def write_profile(self, binding: Binding, asset: AssetPayload) -> AdapterResult: ...
+
+    def read_back(self, binding: Binding, refs: Sequence[BackendObjectRef] | None = None) -> AdapterResult: ...

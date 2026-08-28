@@ -1,0 +1,71 @@
+# ZSK Knowledge Base Skill
+
+一套面向 Codex / WorkBuddy 的通用知识库 Skill 组合。公开入口只有 `zsk-router`，其余组件负责资料登记、业务知识、参考方法和主体资料的安全处理。
+
+## 课堂上只说这一句话
+
+把下面这句话完整发给 Codex 或 WorkBuddy：
+
+> 请从 https://github.com/slbb1995/zsk-knowledge-base-skill 安装完整的 ZSK 知识库 Skill 组合。先阅读仓库 README，不覆盖任何已有同名目录；安装到你当前正在使用的 Skills 目录。安装后检查 zsk-router、zsk-ruku、zsk-zhishi、zsk-duibiao、zsk-profile 和 shared 是否齐全，并告诉我是否需要重新打开当前任务。
+
+安装完成后，重新打开一个任务，再发送：
+
+> 请检查 zsk-router 是否已经可以使用，并告诉我当前是否具备连接飞书和创建个人知识库的条件。先检查，不要创建。
+
+## 开始前的前置条件
+
+- 电脑上已经可以使用 Codex 或 WorkBuddy。
+- WorkBuddy 已经连接本人飞书账号。
+- 当前账号具备创建飞书知识库的权限。
+- 如果使用飞书后端，本机需要有可用的 `lark-cli`，并完成用户身份授权。
+
+这些条件没有通过时，ZSK 会准确停止，不会假装已经创建或写入。
+
+## 手动安装
+
+默认安装到 `~/.codex/skills`：
+
+```bash
+git clone https://github.com/slbb1995/zsk-knowledge-base-skill.git
+python3 zsk-knowledge-base-skill/install.py
+```
+
+安装到其他 Skills 目录：
+
+```bash
+python3 zsk-knowledge-base-skill/install.py --dest /你的/Skills/目录
+```
+
+只检查、不写入：
+
+```bash
+python3 zsk-knowledge-base-skill/install.py --check
+```
+
+安装器不会覆盖已有同名目录。发现冲突时会停止，并列出需要人工处理的目录。
+
+## 包含的组件
+
+- `zsk-router`：唯一公开入口，识别建库、入库和状态任务。
+- `zsk-ruku`：登记来源、版本、隐私与使用权限。
+- `zsk-zhishi`：把已确认资料整理为业务知识。
+- `zsk-duibiao`：只提炼外部参考的表达方法。
+- `zsk-profile`：整理主体确认事实、运营设定和候选素材。
+- `shared`：以上组件共用的合同、格式读取和飞书／Obsidian 适配代码。
+
+## 第一次使用示例
+
+创建个人知识库：
+
+> 请使用 zsk-router，在飞书里为我创建一个私有知识库，名称为“AI学习测试库-我的姓名”。先检查连接、账号和权限，给我看创建预览，等我确认后再创建；创建后请回读并把链接发给我。
+
+上传资料：
+
+> 请使用 zsk-router，把这份 Word 上传到我刚创建的个人知识库。先让我确认你识别到的文件名和使用边界，再入库；完成后请回读并告诉我结果。
+
+## 安全边界
+
+- 不在仓库中保存飞书账号、访问令牌、客户资料或个人隐私。
+- 权限、来源、版本、隐私或回读失败时停止。
+- 不把课堂模拟价格、库存或交付时间当成真实业务承诺。
+

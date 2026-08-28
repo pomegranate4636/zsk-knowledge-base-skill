@@ -1,0 +1,6 @@
+interface:
+  display_name: "ZSK 来源登记"
+  short_description: "登记来源身份并执行隐私、版本和防重合同"
+  default_prompt: "仅由 $zsk-router 后台调用：登记来源原件与可读版，遇到隐私、权限、版本、重复或回读问题时 fail closed。"
+policy:
+  allow_implicit_invocation: false

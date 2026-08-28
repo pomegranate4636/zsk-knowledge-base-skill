@@ -1,0 +1,6 @@
+interface:
+  display_name: "ZSK 业务知识"
+  short_description: "把已登记来源整理为可回链的业务知识资产"
+  default_prompt: "仅由 $zsk-router 后台调用：根据已登记来源生成可回链的 03 业务知识资产，不把方法、候选或未核验内容写成事实。"
+policy:
+  allow_implicit_invocation: false

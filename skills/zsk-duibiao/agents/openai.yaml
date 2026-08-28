@@ -1,0 +1,6 @@
+interface:
+  display_name: "ZSK 内容方法"
+  short_description: "从外部参考提炼可迁移的内容方法"
+  default_prompt: "仅由 $zsk-router 后台调用：把已登记参考整理成 04 方法资产，只保留怎么讲并保留来源回链。"
+policy:
+  allow_implicit_invocation: false

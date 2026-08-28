@@ -1,0 +1,4 @@
+interface:
+  display_name: "ZSK 通用知识库入口"
+  short_description: "统一编排通用知识库任务并在关键失败时停止"
+  default_prompt: "使用 $zsk-router 处理这个通用知识库任务，先确认唯一绑定、依赖、权限和来源边界，再返回可回读的状态与下一步。"
