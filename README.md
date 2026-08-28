@@ -2,6 +2,33 @@
 
 一套面向 Codex / WorkBuddy 的通用知识库 Skill 组合。公开入口只有 `zsk-router`，其余组件负责资料登记、业务知识、参考方法和主体资料的安全处理。
 
+## 仓库定位
+
+这是 **ZSK 的唯一更新真源**。所有 ZSK 功能、安装说明和测试先在这里修改、验证并合并到 `main`。
+
+后续只能从这里单向同步到：
+
+```text
+zsk-knowledge-base-skill（唯一真源）
+→ zhihui-mianmian-skills（客户交付包）
+→ content-slim（知识库消费桥接）
+→ 客户或讲师本机 ~/.codex/skills（运行安装副本）
+```
+
+不要在交付包、Content Slim 或已安装副本中反向修改 ZSK；它们不是更新真源。历史 `content-workflow-skills` 只保留开发与验收记录，不再作为 ZSK 的日常开发入口。
+
+## 一句话理解
+
+```text
+客户上传资料
+→ zsk-router
+→ MarkItDown 转 readable.md
+→ 01 来源登记
+→ 03 业务知识 / 04 内容方法 / 05 Profile，或 02 待审核
+```
+
+客户始终只调用 `zsk-router`。`markitdown-skill` 是必装后台能力，不是第二个入库入口。
+
 ## 课堂上只说这一句话
 
 把下面这句话完整发给 Codex 或 WorkBuddy：
@@ -33,7 +60,7 @@ python3 zsk-knowledge-base-skill/install.py --install-markitdown
 安装到其他 Skills 目录：
 
 ```bash
-python3 zsk-knowledge-base-skill/install.py --dest /你的/Skills/目录
+python3 zsk-knowledge-base-skill/install.py --dest /你的/Skills/目录 --install-markitdown
 ```
 
 只检查、不写入：
@@ -63,6 +90,12 @@ python3 zsk-knowledge-base-skill/install.py --doctor
 ```
 
 Doctor 未通过时，富文档会准确停止并进入 02；不会静默换用另一套解析器，也不会把资料交给大模型。图片型 PPT/PDF 的逐页图片、OCR 和图文映射属于后续富媒体阶段，当前不处理。
+
+## 当前范围与后续范围
+
+- 当前：MD、TXT、CSV，以及经 MarkItDown 转换的 DOCX、PPTX、XLSX、PDF、HTML、JSON。
+- 后续富媒体阶段：图片型 PPT/PDF 的逐页图片、OCR、页码证据链。
+- 不在当前范围：零散图片、音视频、图片向量检索、自动图文对应、自动发布。
 
 ## 包含的组件
 
