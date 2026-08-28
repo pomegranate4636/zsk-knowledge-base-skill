@@ -44,6 +44,26 @@ python3 zsk-knowledge-base-skill/install.py --check
 
 安装器不会覆盖已有同名目录。发现冲突时会停止，并列出需要人工处理的目录。
 
+## 文档转换前置条件
+
+ZSK 不让大模型直接读取 Office 或 PDF。MD/TXT/CSV 可直接入库；DOCX、PPTX、XLSX、PDF、HTML、JSON 由 Microsoft MarkItDown 在本机转换为唯一正式 `readable.md`。
+
+首次安装后，用最小格式集合安装并检查转换器；不使用 `markitdown[all]`，因为图片 OCR、音视频和联网扩展不属于当前版本：
+
+```bash
+pipx install 'markitdown[docx,pdf,pptx,xlsx]==0.1.6'
+python3 zsk-knowledge-base-skill/install.py --doctor
+```
+
+若已安装基础版 MarkItDown：
+
+```bash
+pipx inject --force markitdown 'markitdown[docx,pdf,pptx,xlsx]==0.1.6'
+python3 zsk-knowledge-base-skill/install.py --doctor
+```
+
+Doctor 未通过时，富文档会准确停止并进入 02；不会静默换用另一套解析器，也不会把资料交给大模型。图片型 PPT/PDF 的逐页图片、OCR 和图文映射属于后续富媒体阶段，当前不处理。
+
 ## 包含的组件
 
 - `zsk-router`：唯一公开入口，识别建库、入库和状态任务。
@@ -68,4 +88,3 @@ python3 zsk-knowledge-base-skill/install.py --check
 - 不在仓库中保存飞书账号、访问令牌、客户资料或个人隐私。
 - 权限、来源、版本、隐私或回读失败时停止。
 - 不把课堂模拟价格、库存或交付时间当成真实业务承诺。
-

@@ -7,6 +7,7 @@ import argparse
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 
 
@@ -35,6 +36,8 @@ def validate_source(source_root: Path) -> list[str]:
             errors.append(f"缺少组件目录：{component}")
         if name != "shared" and not (component / "SKILL.md").is_file():
             errors.append(f"缺少 Skill 入口：{component / 'SKILL.md'}")
+    if not (source_root / "shared" / "markdown_converter.py").is_file():
+        errors.append("缺少统一 Markdown 转换模块：shared/markdown_converter.py")
     return errors
 
 
@@ -43,9 +46,22 @@ def installed_state(destination: Path) -> tuple[list[str], list[str]]:
     missing: list[str] = []
     for name in COMPONENTS:
         target = destination / name
-        valid = target.is_dir() and (name == "shared" or (target / "SKILL.md").is_file())
+        valid = target.is_dir() and (
+            (target / "markdown_converter.py").is_file() if name == "shared" else (target / "SKILL.md").is_file()
+        )
         (present if valid else missing).append(name)
     return present, missing
+
+
+def converter_version() -> str | None:
+    executable = shutil.which("markitdown")
+    if not executable:
+        return None
+    try:
+        completed = subprocess.run((executable, "--version"), capture_output=True, text=True, timeout=15, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return completed.stdout.strip() if completed.returncode == 0 and completed.stdout.strip() else None
 
 
 def install(source_root: Path, destination: Path) -> int:
@@ -92,6 +108,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="安装完整的 ZSK 知识库 Skill 组合")
     parser.add_argument("--dest", type=Path, default=default_destination(), help="目标 Skills 目录")
     parser.add_argument("--check", action="store_true", help="只检查目标目录，不写入")
+    parser.add_argument("--doctor", action="store_true", help="检查完整组件与 MarkItDown 转换器，不写入")
     args = parser.parse_args()
 
     destination = args.dest.expanduser().resolve()
@@ -102,10 +119,16 @@ def main() -> int:
         print("缺少：" + ("、".join(missing) if missing else "无"))
         return 0 if not missing else 1
 
+    if args.doctor:
+        present, missing = installed_state(destination)
+        version = converter_version()
+        print("组件：" + ("齐全" if not missing else "缺少 " + "、".join(missing)))
+        print("MarkItDown：" + (version or "不可用"))
+        return 0 if not missing and version else 1
+
     source_root = Path(__file__).resolve().parent / "skills"
     return install(source_root, destination)
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

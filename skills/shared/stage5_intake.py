@@ -13,7 +13,7 @@ from typing import Any
 
 from .adapter import KnowledgeBaseAdapter
 from .contracts import BINDING_SCHEMA, SOURCE_ROLES, SOURCE_SCHEMA, TASK_ID, BackendObjectRef, Binding, ExceptionRecord, SourceRecord
-from .format_readers import DependencyMissing, readable_text
+from .markdown_converter import ConversionFailed, ConverterUnavailable, MarkdownConversion, convert_to_markdown
 
 
 SUPPORTED_SUFFIXES = frozenset({".md", ".txt", ".csv", ".json", ".html", ".htm", ".docx", ".pptx", ".xlsx", ".pdf"})
@@ -100,14 +100,16 @@ class Stage5Intake:
         if suffix not in SUPPORTED_SUFFIXES:
             return self._exception(request.binding, source_id, "format_unsupported", evidence)
         try:
-            body = self._readable(request.payload, suffix)
-        except DependencyMissing:
-            evidence["format_note"] = "PDF 需要宿主环境提供可选依赖 pypdf；缺失时按 format_unsupported 准确停止。"
+            conversion = self._readable(request.payload, suffix)
+        except ConverterUnavailable:
+            evidence["format_note"] = "本机缺少可运行的 MarkItDown；未保存原件或正文。"
             return self._exception(request.binding, source_id, "format_unsupported", evidence)
-        except UnicodeError:
+        except (UnicodeError, ConversionFailed):
             return self._exception(request.binding, source_id, "conversion_failed", evidence)
         except (csv.Error, ValueError):
             return self._exception(request.binding, source_id, "source_unreadable", evidence)
+        body = conversion.text
+        evidence["conversion"] = {"engine": conversion.engine, "version": conversion.version}
         sensitive_count = sum(len(pattern.findall(body)) for pattern in _SENSITIVE)
         evidence["privacy"] = {"sensitive_match_count": sensitive_count, "original_retention_approved": request.original_retention_approved}
         if sensitive_count and not request.original_retention_approved:
@@ -127,7 +129,7 @@ class Stage5Intake:
         if sensitive_count:
             for pattern in _SENSITIVE:
                 body = pattern.sub("[已脱敏]", body)
-        readable = self._document(request, source_id, digest, privacy_status, version_of, body)
+        readable = self._document(request, source_id, digest, privacy_status, version_of, conversion, body)
         record = SourceRecord(
             SOURCE_SCHEMA, source_id, request.binding.client_id, request.source_title.strip(), request.source_role,
             "table" if suffix in _TABLE_SUFFIXES else "text", request.file_name, digest,
@@ -177,14 +179,14 @@ class Stage5Intake:
         return IntakeResponse("exception", final_code, source_id, output_refs, None, evidence)
 
     @staticmethod
-    def _readable(payload: bytes, suffix: str) -> str:
+    def _readable(payload: bytes, suffix: str) -> MarkdownConversion:
         if suffix not in {".md", ".txt", ".csv"}:
-            return readable_text(payload, suffix)
+            return convert_to_markdown(payload, suffix)
         text = payload.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
         if not text.strip() or "\x00" in text:
             raise ValueError("empty or binary input")
         if suffix != ".csv":
-            return text.rstrip() + "\n"
+            return MarkdownConversion(text.rstrip() + "\n", "zsk-text", "v1")
         rows = list(csv.reader(io.StringIO(text, newline=""), strict=True))
         if not rows or not rows[0] or any(not cell.strip() for cell in rows[0]):
             raise ValueError("CSV requires a non-empty header")
@@ -194,10 +196,10 @@ class Stage5Intake:
         escaped = [[cell.replace("|", "\\|").replace("\n", " ") for cell in row] for row in rows]
         lines = ["| " + " | ".join(escaped[0]) + " |", "| " + " | ".join("---" for _ in escaped[0]) + " |"]
         lines.extend("| " + " | ".join(row) + " |" for row in escaped[1:])
-        return "\n".join(lines) + "\n"
+        return MarkdownConversion("\n".join(lines) + "\n", "zsk-csv", "v1")
 
     @staticmethod
-    def _document(request: IntakeRequest, source_id: str, original_sha256: str, privacy_status: str, version_of: str | None, body: str) -> bytes:
+    def _document(request: IntakeRequest, source_id: str, original_sha256: str, privacy_status: str, version_of: str | None, conversion: MarkdownConversion, body: str) -> bytes:
         suffix = PurePath(request.file_name).suffix.lower()
         unit_kind, unit_count = Stage5Intake._content_units(suffix, body)
         fields = {
@@ -206,19 +208,14 @@ class Stage5Intake:
             "source_role": request.source_role,
             "original_sha256": original_sha256, "privacy_status": privacy_status,
             "permission_status": request.permission_status, "original_retention_approved": request.original_retention_approved or privacy_status == "passed",
-            "version_of": version_of, "content_unit_kind": unit_kind, "content_unit_count": unit_count,
+            "version_of": version_of, "conversion_engine": conversion.engine, "conversion_version": conversion.version,
+            "content_unit_kind": unit_kind, "content_unit_count": unit_count,
         }
         frontmatter = "\n".join(f"{key}: {json.dumps(value, ensure_ascii=False)}" for key, value in fields.items())
         return f"---\n{frontmatter}\n---\n\n{body}".encode("utf-8")
 
     @staticmethod
     def _content_units(suffix: str, body: str) -> tuple[str | None, int | None]:
-        if suffix == ".pptx":
-            return "slides", len(re.findall(r"(?m)^## 幻灯片 \d+$", body))
-        if suffix == ".pdf":
-            return "pages", len(re.findall(r"(?m)^## 第 \d+ 页$", body))
-        if suffix == ".xlsx":
-            return "worksheets", len(re.findall(r"(?m)^## 工作表：", body))
         return None, None
 
     @staticmethod

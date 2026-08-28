@@ -71,7 +71,8 @@ class FirstRunBootstrap:
             messages = {
                 "feishu_auth_missing": "请先连接自己的飞书，连接后再继续创建。",
                 "binding_missing": "默认 Obsidian 位置不可用，请选择一个可写的父目录。",
-                "binding_conflict": "这个 Obsidian 目标已存在，请换名称或位置，系统不会覆盖。",
+                "binding_conflict": "这个目标已存在，请换名称或位置，系统不会覆盖或复用。",
+                "readback_failed": "无法确认飞书中是否已有同名知识空间，未创建。",
             }
             return BootstrapResponse("connection_required" if code == "feishu_auth_missing" else "needs_input", code, messages.get(code, "创建前检查未通过，未创建。"), preview, None, None)
         token = self._token(request.backend_type, client_name, name, preview["target"])
@@ -90,6 +91,11 @@ class FirstRunBootstrap:
             probe = FeishuAdapter(self.runner).doctor()
             if probe.status not in {"ok", "reused"}:
                 return {"backend": "feishu", "name": name, "target": "连接自己的飞书后创建"}, probe.code or "feishu_auth_missing"
+            existing = self._feishu_name_exists(name)
+            if existing is None:
+                return {"backend": "feishu", "name": name, "target": "无法确认同名空间"}, "readback_failed"
+            if existing:
+                return {"backend": "feishu", "name": name, "target": "已有同名私有知识空间"}, "binding_conflict"
             return {"backend": "feishu", "name": name, "target": "将在你的飞书账号下创建私有知识空间"}, None
         root = Path(parent) if parent else self._default_documents_parent()
         if not self._safe_directory(root):
@@ -125,6 +131,14 @@ class FirstRunBootstrap:
         if result.status != "created":
             return BootstrapResponse("blocked", result.code or "write_failed", "飞书空间已创建，但知识库结构未完整创建。", {"backend": "feishu", "name": name, "target": locator}, None, locator, result.root_refs)
         return BootstrapResponse("created", None, "知识库已创建，可以开始上传资料。", {"backend": "feishu", "name": name, "target": locator}, None, locator, result.root_refs)
+
+    def _feishu_name_exists(self, name: str) -> bool | None:
+        response = self.runner.run(("lark-cli", "--as", "user", "wiki", "spaces", "list", "--page-all", "--format", "json"))
+        payload = self._json(response)
+        items = payload.get("data", {}).get("items") if isinstance(payload, dict) else None
+        if response.returncode != 0 or not isinstance(items, list):
+            return None
+        return any(isinstance(item, dict) and item.get("name") == name for item in items)
 
     @staticmethod
     def _skeleton(adapter: Any, binding: Binding) -> Any:

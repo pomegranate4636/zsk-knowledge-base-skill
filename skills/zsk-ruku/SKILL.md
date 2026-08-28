@@ -9,9 +9,11 @@ description: 通用知识库的来源登记职责。负责来源身份、可读�
 
 把一次来源处理变成稳定、可解释、可回读的来源记录。原件和可读版分开登记，正式资产只能通过来源身份与来源回链继续流转。
 
-## 阶段 5 Slim
+## 统一 Markdown 转换
 
-确定性读取 MD、TXT、严格 CSV、JSON、HTML/HTM，以及 DOCX、PPTX、XLSX（OOXML 按 ZIP+XML 规范位置提取），不安装依赖、不调用大模型。PDF 为原则支持：依赖宿主环境提供的可选依赖 `pypdf`，缺失时按 `format_unsupported` 准确停止。旧版二进制 Office（.doc/.xls/.ppt）、图片、音视频仍准确停止。`source_id` 使用原件 SHA256；通过权限与隐私 Gate 后，在 01 create-only 分开保存保留安全扩展名的原件和带来源记录的可读 Markdown。异常只在 02 保存固定安全说明。只返回 `registered / reused / exception`，不判断 03/04/05。
+MD、TXT 原样规范化，CSV 严格转 Markdown 表格；JSON、HTML/HTM、DOCX、PPTX、XLSX、PDF 一律由本机 Microsoft MarkItDown 转为唯一正式 `readable.md`。转换不联网、不调用大模型；MarkItDown 不可运行、输出为空或转换失败时，只写 02 的安全说明，不保存原件或正文。旧版二进制 Office（.doc/.xls/.ppt）、图片、音视频仍准确停止。
+
+`source_id` 使用原件 SHA256；通过权限与隐私 Gate 后，在 01 create-only 分开保存保留安全扩展名的原件和带来源记录的可读 Markdown。可读版必须记录转换器名称和版本。异常只在 02 保存固定安全说明。只返回 `registered / reused / exception`，不判断 03/04/05。
 
 ## 停止条件
 
