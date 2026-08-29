@@ -5,12 +5,14 @@ from dataclasses import dataclass
 from functools import lru_cache
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
 
 
 MARKITDOWN_SUFFIXES = frozenset({".docx", ".pptx", ".xlsx", ".pdf", ".html", ".htm", ".json"})
+_PPTX_SLIDE_COMMENT = re.compile(r"(?m)^<!--[ \t]*Slide number:[ \t]*(\d+)[ \t]*-->[ \t]*$")
 
 
 class ConverterUnavailable(Exception):
@@ -57,9 +59,16 @@ def convert_to_markdown(payload: bytes, suffix: str) -> MarkdownConversion:
         except UnicodeError as exc:
             raise ConversionFailed("MarkItDown output is not UTF-8") from exc
     text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if suffix == ".pptx":
+        text = normalize_pptx_slide_markers(text)
     if not text or "\x00" in text:
         raise ConversionFailed("MarkItDown produced no safe readable text")
     return MarkdownConversion(text + "\n", "markitdown", version)
+
+
+def normalize_pptx_slide_markers(text: str) -> str:
+    """将 MarkItDown 的 PPT 页码注释变成知识页中可见、可引用的页标题。"""
+    return _PPTX_SLIDE_COMMENT.sub(lambda match: f"## 第 {match.group(1)} 页", text)
 
 
 def markitdown_status() -> MarkdownConversion | None:
