@@ -40,6 +40,8 @@ def validate_source(source_root: Path) -> list[str]:
             errors.append(f"缺少 Skill 入口：{component / 'SKILL.md'}")
     if not (source_root / "shared" / "markdown_converter.py").is_file():
         errors.append("缺少统一 Markdown 转换模块：shared/markdown_converter.py")
+    if not (source_root / "shared" / "page_renderer.py").is_file():
+        errors.append("缺少可选页级证据模块：shared/page_renderer.py")
     return errors
 
 
@@ -49,7 +51,8 @@ def installed_state(destination: Path) -> tuple[list[str], list[str]]:
     for name in COMPONENTS:
         target = destination / name
         valid = target.is_dir() and (
-            (target / "markdown_converter.py").is_file() if name == "shared" else (target / "SKILL.md").is_file()
+            (target / "markdown_converter.py").is_file() and (target / "page_renderer.py").is_file()
+            if name == "shared" else (target / "SKILL.md").is_file()
         )
         (present if valid else missing).append(name)
     return present, missing
@@ -78,6 +81,28 @@ def install_converter() -> bool:
         print("MarkItDown 安装未完成。", file=sys.stderr)
         return False
     return completed.returncode == 0 and converter_version() is not None
+
+
+def page_evidence_status() -> dict[str, bool]:
+    pdf_ready = _optional_binary_ready(("pdftoppm",), ("-v",)) and _optional_binary_ready(("pdfinfo",), ("-v",))
+    ppt_ready = bool(pdf_ready and _optional_binary_ready(("soffice", "libreoffice"), ("--version",)))
+    return {"pdf": pdf_ready, "pptx": ppt_ready}
+
+
+def _optional_binary_ready(names: tuple[str, ...], version_args: tuple[str, ...]) -> bool:
+    for name in names:
+        executable = shutil.which(name)
+        if not executable:
+            continue
+        try:
+            completed = subprocess.run(
+                (executable, *version_args), capture_output=True, text=True, timeout=15, check=False, shell=False
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if completed.returncode == 0:
+            return True
+    return False
 
 
 def install(source_root: Path, destination: Path) -> int:
@@ -139,8 +164,10 @@ def main() -> int:
     if args.doctor:
         present, missing = installed_state(destination)
         version = converter_version()
+        pages = page_evidence_status()
         print("组件：" + ("齐全" if not missing else "缺少 " + "、".join(missing)))
         print("MarkItDown：" + (version or "不可用"))
+        print("页级证据（可选）：PDF " + ("可用" if pages["pdf"] else "不可用") + "；PPTX " + ("可用" if pages["pptx"] else "不可用"))
         return 0 if not missing and version else 1
 
     source_root = Path(__file__).resolve().parent / "skills"

@@ -29,6 +29,8 @@ zsk-knowledge-base-skill（唯一真源）
 
 客户始终只调用 `zsk-router`。`markitdown-skill` 是必装后台能力，不是第二个入库入口。
 
+对于页面版式、图表或截图本身影响含义的 PDF/PPTX，可以在用户明确同意后启用通用“完整页证据”。它不包含任何行业专用规则，也不会默认增加到每次入库。
+
 ## 课堂上只说这一句话
 
 把下面这句话完整发给 Codex 或 WorkBuddy：
@@ -89,13 +91,13 @@ pipx inject --force markitdown 'markitdown[docx,pdf,pptx,xlsx]==0.1.6'
 python3 zsk-knowledge-base-skill/install.py --doctor
 ```
 
-Doctor 未通过时，富文档会准确停止并进入 02；不会静默换用另一套解析器，也不会把资料交给大模型。图片型 PPT/PDF 的逐页图片、OCR 和图文映射属于后续富媒体阶段，当前不处理。
+Doctor 未通过时，富文档会准确停止并进入 02；不会静默换用另一套解析器，也不会把资料交给大模型。Doctor 还会单独显示可选的 PDF/PPTX 页级证据能力；这项可选能力不可用不会阻断普通文字入库。
 
 ## 当前范围与后续范围
 
-- 当前：MD、TXT、CSV，以及经 MarkItDown 转换的 DOCX、PPTX、XLSX、PDF、HTML、JSON。
-- 后续富媒体阶段：图片型 PPT/PDF 的逐页图片、OCR、页码证据链。
-- 不在当前范围：零散图片、音视频、图片向量检索、自动图文对应、自动发布。
+- 当前默认：MD、TXT、CSV，以及经 MarkItDown 转换的 DOCX、PPTX、XLSX、PDF、HTML、JSON。
+- 当前可选：PDF/PPTX 完整页图、连续页码、页图 SHA256、01 Manifest 和写后回读。启用时需要 `pdftoppm`、`pdfinfo`；PPTX 还需要 LibreOffice。
+- 不在当前范围：OCR、零散图片、音视频、图片向量检索、自动图文对应、自动发布。
 
 ## 包含的组件
 

@@ -7,13 +7,15 @@ from dataclasses import dataclass
 import hashlib
 import io
 import json
-from pathlib import PurePath
+from pathlib import Path, PurePath
 import re
+import tempfile
 from typing import Any
 
 from .adapter import KnowledgeBaseAdapter
-from .contracts import BINDING_SCHEMA, SOURCE_ROLES, SOURCE_SCHEMA, TASK_ID, BackendObjectRef, Binding, ExceptionRecord, SourceRecord
+from .contracts import BINDING_SCHEMA, SOURCE_ROLES, SOURCE_SCHEMA, TASK_ID, BackendObjectRef, Binding, ExceptionRecord, PageArtifact, SourceRecord
 from .markdown_converter import ConversionFailed, ConverterUnavailable, MarkdownConversion, convert_to_markdown
+from .page_renderer import PageRenderFailed, PageRendererUnavailable, RenderedPage, render_page_evidence
 
 
 SUPPORTED_SUFFIXES = frozenset({".md", ".txt", ".csv", ".json", ".html", ".htm", ".docx", ".pptx", ".xlsx", ".pdf"})
@@ -26,6 +28,8 @@ _SAFE_NOTES = {
     "format_unsupported": "当前版本不支持该格式（或缺少该格式的可选依赖），未保存原件或正文。",
     "source_unreadable": "资料为空或无法安全读取，未保存原件或正文。",
     "conversion_failed": "资料无法按严格规则转换，未保存原件或正文。",
+    "page_evidence_unavailable": "当前电脑缺少可选的完整页证据能力，未保存原件、正文或页图。",
+    "page_evidence_failed": "完整页证据生成或校验失败，未报告登记成功。",
     "permission_denied": "资料处理权未获允许，未保存原件或正文。",
     "ownership_unknown": "资料归属尚未确认，未保存原件或正文。",
     "privacy_approval_required": "检测到敏感信息，尚未取得原件保存授权。",
@@ -54,6 +58,7 @@ class IntakeRequest:
     original_retention_approved: bool = False
     stable_source_locator: str | None = None
     confirmed_version_of: str | None = None
+    page_evidence_mode: str = "off"
 
     def __post_init__(self) -> None:
         if not TASK_ID.fullmatch(self.task_id):
@@ -66,6 +71,8 @@ class IntakeRequest:
             raise ValueError("source_role is unsupported")
         if self.permission_status not in {"allowed", "unknown", "denied"}:
             raise ValueError("permission_status is unsupported")
+        if self.page_evidence_mode not in {"off", "required"}:
+            raise ValueError("page_evidence_mode is unsupported")
 
 
 @dataclass(frozen=True)
@@ -114,6 +121,9 @@ class Stage5Intake:
         evidence["privacy"] = {"sensitive_match_count": sensitive_count, "original_retention_approved": request.original_retention_approved}
         if sensitive_count and not request.original_retention_approved:
             return self._exception(request.binding, source_id, "privacy_approval_required", evidence)
+        if request.page_evidence_mode == "required" and not request.original_retention_approved:
+            evidence["page_evidence"] = {"mode": "required", "status": "approval_required"}
+            return self._exception(request.binding, source_id, "privacy_approval_required", evidence)
         prior_role = self._roles.get((request.binding.client_id, source_id))
         if prior_role is not None and prior_role != request.source_role:
             return self._exception(request.binding, source_id, "duplicate_conflict", evidence)
@@ -129,12 +139,41 @@ class Stage5Intake:
         if sensitive_count:
             for pattern in _SENSITIVE:
                 body = pattern.sub("[已脱敏]", body)
-        readable = self._document(request, source_id, digest, privacy_status, version_of, conversion, body)
+        rendered_pages: tuple[RenderedPage, ...] = ()
+        page_engine: str | None = None
+        if request.page_evidence_mode == "required":
+            if suffix not in {".pdf", ".pptx"}:
+                evidence["page_evidence"] = {"mode": "required", "status": "unsupported_format"}
+                return self._exception(request.binding, source_id, "page_evidence_failed", evidence)
+            try:
+                with tempfile.TemporaryDirectory(prefix="zsk-page-evidence-") as folder:
+                    rendered = render_page_evidence(request.payload, suffix, source_id, Path(folder))
+            except PageRendererUnavailable:
+                evidence["page_evidence"] = {"mode": "required", "status": "unavailable"}
+                return self._exception(request.binding, source_id, "page_evidence_unavailable", evidence)
+            except PageRenderFailed:
+                evidence["page_evidence"] = {"mode": "required", "status": "failed"}
+                return self._exception(request.binding, source_id, "page_evidence_failed", evidence)
+            rendered_pages = rendered.pages
+            page_engine = rendered.engine
+            evidence["page_evidence"] = {
+                "mode": "required", "status": "complete", "engine": page_engine,
+                "page_count": rendered.page_count,
+                "page_sha256": [page.artifact.sha256 for page in rendered_pages],
+            }
+        page_artifacts = tuple(page.artifact for page in rendered_pages)
+        readable = self._document(
+            request, source_id, digest, privacy_status, version_of, conversion, body,
+            page_artifacts=page_artifacts, page_engine=page_engine,
+        )
         record = SourceRecord(
             SOURCE_SCHEMA, source_id, request.binding.client_id, request.source_title.strip(), request.source_role,
-            "table" if suffix in _TABLE_SUFFIXES else "text", request.file_name, digest,
+            self._content_kind(suffix), request.file_name, digest,
             hashlib.sha256(readable).hexdigest(), privacy_status, request.permission_status, version_of,
             "registered", request.original_retention_approved or not sensitive_count,
+            page_evidence_mode=request.page_evidence_mode,
+            page_count=len(page_artifacts),
+            page_artifacts=page_artifacts,
         )
         original = self.adapter.store_original(request.binding, record, request.payload)
         self._event(evidence, "store_original", original.status, original.code)
@@ -145,13 +184,25 @@ class Stage5Intake:
         if readable_result.status not in {"ok", "reused"}:
             return self._exception(request.binding, source_id, readable_result.code or "write_failed", evidence, original.object_refs)
         refs = original.object_refs + readable_result.object_refs
+        write_statuses = [original.status, readable_result.status]
+        for rendered_page in rendered_pages:
+            page_result = self.adapter.store_page_evidence(
+                request.binding, record, rendered_page.artifact, rendered_page.payload
+            )
+            self._event(evidence, "store_page_evidence", page_result.status, page_result.code)
+            if page_result.status not in {"ok", "reused"}:
+                return self._exception(
+                    request.binding, source_id, page_result.code or "write_failed", evidence, refs
+                )
+            refs += page_result.object_refs
+            write_statuses.append(page_result.status)
         readback = self.adapter.read_back(request.binding, refs)
         self._event(evidence, "read_back", readback.status, readback.code)
         if readback.status not in {"ok", "reused"}:
             return self._exception(request.binding, source_id, readback.code or "readback_failed", evidence, refs)
         self._names[name_key] = source_id
         self._roles[(request.binding.client_id, source_id)] = request.source_role
-        status = "reused" if original.status == readable_result.status == "reused" else "registered"
+        status = "reused" if all(item == "reused" for item in write_statuses) else "registered"
         evidence.update({"status": status, "code": None, "output_ref_ids": [ref.object_id for ref in refs]})
         return IntakeResponse(status, None, source_id, refs, record, evidence)
 
@@ -199,7 +250,18 @@ class Stage5Intake:
         return MarkdownConversion("\n".join(lines) + "\n", "zsk-csv", "v1")
 
     @staticmethod
-    def _document(request: IntakeRequest, source_id: str, original_sha256: str, privacy_status: str, version_of: str | None, conversion: MarkdownConversion, body: str) -> bytes:
+    def _document(
+        request: IntakeRequest,
+        source_id: str,
+        original_sha256: str,
+        privacy_status: str,
+        version_of: str | None,
+        conversion: MarkdownConversion,
+        body: str,
+        *,
+        page_artifacts: tuple[PageArtifact, ...] = (),
+        page_engine: str | None = None,
+    ) -> bytes:
         suffix = PurePath(request.file_name).suffix.lower()
         unit_kind, unit_count = Stage5Intake._content_units(suffix, body)
         fields = {
@@ -210,6 +272,10 @@ class Stage5Intake:
             "permission_status": request.permission_status, "original_retention_approved": request.original_retention_approved or privacy_status == "passed",
             "version_of": version_of, "conversion_engine": conversion.engine, "conversion_version": conversion.version,
             "content_unit_kind": unit_kind, "content_unit_count": unit_count,
+            "page_evidence_mode": request.page_evidence_mode,
+            "page_evidence_engine": page_engine,
+            "page_count": len(page_artifacts),
+            "page_manifest": [item.as_dict() for item in page_artifacts],
         }
         frontmatter = "\n".join(f"{key}: {json.dumps(value, ensure_ascii=False)}" for key, value in fields.items())
         return f"---\n{frontmatter}\n---\n\n{body}".encode("utf-8")
@@ -219,12 +285,23 @@ class Stage5Intake:
         return None, None
 
     @staticmethod
+    def _content_kind(suffix: str) -> str:
+        if suffix == ".pptx":
+            return "presentation"
+        if suffix in _TABLE_SUFFIXES:
+            return "table"
+        if suffix in {".pdf", ".docx"}:
+            return "document"
+        return "text"
+
+    @staticmethod
     def _evidence(request: IntakeRequest, suffix: str, source_id: str) -> dict[str, Any]:
         return {
             "schema_version": "zsk-stage5-intake-evidence-v1", "task_id": request.task_id, "phase_id": "ZSK-P5",
             "safe_input_summary": f"stage5:{suffix.removeprefix('.') or 'none'}:{request.source_role}", "source_id": source_id,
             "events": [], "privacy": {"sensitive_match_count": 0, "original_retention_approved": request.original_retention_approved},
             "model_call_count": 0, "downstream_asset_call_count": 0,
+            "page_evidence": {"mode": request.page_evidence_mode, "status": "not_requested"},
         }
 
     @staticmethod

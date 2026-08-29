@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT / "skills"))
 
 from shared.contracts import BINDING_SCHEMA, ROOT_KEYS, Binding  # noqa: E402
 from shared.fake_adapter import FakeAdapter  # noqa: E402
-from shared.markdown_converter import MarkdownConversion  # noqa: E402
+from shared.markdown_converter import MarkdownConversion, normalize_pptx_slide_markers  # noqa: E402
 from shared.stage5_intake import IntakeRequest, Stage5Intake  # noqa: E402
 from shared.templates import TEMPLATE_VERSION  # noqa: E402
 
@@ -58,6 +58,10 @@ class MarkdownIntakeTests(unittest.TestCase):
     def test_markdown_and_csv_keep_lightweight_local_path(self) -> None:
         response = self.intake.execute(IntakeRequest(TASK_ID, self.binding, "说明.md", "# 标题\n".encode("utf-8"), "说明"))
         self.assertEqual(response.evidence["conversion"], {"engine": "zsk-text", "version": "v1"})
+
+    def test_pptx_slide_comments_become_visible_page_headings(self) -> None:
+        text = "<!-- Slide number: 1 -->\n\n项目定位\n\n<!-- Slide number: 2 -->"
+        self.assertEqual(normalize_pptx_slide_markers(text), "## 第 1 页\n\n项目定位\n\n## 第 2 页")
 
 
 if __name__ == "__main__":

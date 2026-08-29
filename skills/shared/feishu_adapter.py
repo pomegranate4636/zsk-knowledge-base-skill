@@ -6,7 +6,7 @@ import json
 import re
 from typing import Any, Sequence
 from urllib.parse import urlsplit
-from .contracts import AdapterResult, AssetPayload, BackendObjectRef, Binding, ExceptionRecord, SourceRecord, ROOT_KEYS
+from .contracts import AdapterResult, AssetPayload, BackendObjectRef, Binding, ExceptionRecord, PageArtifact, SourceRecord, ROOT_KEYS
 from .feishu_cli import CliRunner, SubprocessCliRunner
 from .feishu_stage5 import FeishuStage5Storage
 from .templates import ROOT_TITLES, root_content
@@ -139,6 +139,9 @@ class FeishuAdapter:
     def store_readable(self, binding: Binding, source: SourceRecord, payload: bytes) -> AdapterResult:
         storage, failure = self._stage5_source_storage(binding, source)
         return self._remember_source(failure or storage.store_readable(source, payload))
+    def store_page_evidence(self, binding: Binding, source: SourceRecord, page: PageArtifact, payload: bytes) -> AdapterResult:
+        storage, failure = self._stage5_source_storage(binding, source)
+        return self._remember_source(failure or storage.store_page_evidence(source, page, payload))
     def write_exception(self, binding: Binding, exception: ExceptionRecord) -> AdapterResult:
         storage, failure = self._stage5_storage(binding)
         return failure or storage.write_exception(exception)

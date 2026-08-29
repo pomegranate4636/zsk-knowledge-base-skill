@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Any, Mapping, Sequence
-from .contracts import AdapterResult, BackendObjectRef, ExceptionRecord, SourceRecord
+from .contracts import AdapterResult, BackendObjectRef, ExceptionRecord, PageArtifact, SourceRecord
 from .feishu_cli import CliResponse, CliRunner
 class FeishuStage5Storage:
     def __init__(self, runner: CliRunner, space_id: str, root_nodes: Mapping[str, str]) -> None:
@@ -42,6 +42,39 @@ class FeishuStage5Storage:
         if hashlib.sha256(payload).hexdigest() != source.readable_sha256:
             return AdapterResult.failed("source_unreadable", "Readable payload hash does not match its record.", blocked=True)
         return self._store_doc(f"{source.source_id}:readable", source.source_id, self.root_nodes["01"], payload, "source_readable", "feishu://01/readable")
+    def store_page_evidence(self, source: SourceRecord, page: PageArtifact, payload: bytes) -> AdapterResult:
+        if page.source_id != source.source_id or page not in source.page_artifacts:
+            return AdapterResult.failed("binding_conflict", "Page evidence does not belong to the source.", blocked=True)
+        if hashlib.sha256(payload).hexdigest() != page.sha256:
+            return AdapterResult.failed("source_unreadable", "Page payload hash does not match its manifest.", blocked=True)
+        key = f"{source.source_id}:page:{page.page_number:03d}"
+        replay = self._replay(key, payload)
+        if replay:
+            return replay
+        name = f"{source.source_id}-page-{page.page_number:03d}-{page.sha256[:16]}.png"
+        node, failure = self._find(self.root_nodes["01"], name, "file")
+        if failure:
+            return failure
+        if node:
+            ref = self._ref(key, "source_page", payload, f"feishu://01/pages/{page.page_number:03d}")
+            self._stored[key] = (page.sha256, ref)
+            return AdapterResult.reused(ref, checked=("remote_page_present", "content_addressed_name", "stable_file_token"))
+        argv = (
+            "lark-cli", "--as", "user", "drive", "+upload", "--file", "{file}",
+            "--wiki-token", self.root_nodes["01"], "--name", name, "--format", "json",
+        )
+        data, failure = self._response(self.runner.upload(argv, payload=payload, name=name), "write_failed")
+        if failure:
+            return failure
+        token = data.get("file_token") or data.get("token")
+        if not isinstance(token, str) or not token:
+            return AdapterResult.failed("readback_failed", "Uploaded page has no stable token.", blocked=True)
+        listed, list_failure = self._find(self.root_nodes["01"], name, "file")
+        if list_failure or not listed:
+            return list_failure or AdapterResult.failed("readback_failed", "Uploaded page cannot be read back by its content-addressed name.", blocked=True)
+        ref = self._ref(key, "source_page", payload, f"feishu://01/pages/{page.page_number:03d}")
+        self._stored[key] = (page.sha256, ref)
+        return AdapterResult.ok(ref, checked=("drive_page_uploaded", "content_addressed_name", "stable_file_token", "list_readback"))
     def write_exception(self, exception: ExceptionRecord) -> AdapterResult:
         payload = (f"原因码：`{exception.reason_code}`\n\n{exception.safe_note}\n\n待确认：{exception.question}\n").encode("utf-8")
         return self._store_doc(f"exception:{exception.exception_id}", exception.exception_id, self.root_nodes["02"], payload, "exception", "feishu://02")

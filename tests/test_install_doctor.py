@@ -28,6 +28,9 @@ class InstallDoctorTests(unittest.TestCase):
     def test_source_requires_the_markdown_converter(self) -> None:
         self.assertEqual(install.validate_source(ROOT / "skills"), [])
 
+    def test_shared_requires_the_page_renderer_module(self) -> None:
+        self.assertTrue((ROOT / "skills" / "shared" / "page_renderer.py").is_file())
+
     def test_markitdown_skill_is_a_required_component(self) -> None:
         self.assertIn("markitdown-skill", install.COMPONENTS)
         self.assertTrue((ROOT / "skills" / "markitdown-skill" / "SKILL.md").is_file())
