@@ -8,7 +8,7 @@ from pathlib import Path, PurePath
 import stat
 from typing import Sequence
 
-from .contracts import AdapterResult, AssetPayload, BackendObjectRef, Binding, ExceptionRecord, SourceRecord, ROOT_KEYS
+from .contracts import AdapterResult, AssetPayload, BackendObjectRef, Binding, ExceptionRecord, MediaArtifact, SourceRecord, ROOT_KEYS
 from .obsidian_stage6 import ObsidianStage6Storage
 from .templates import ROOT_TITLES, root_content, root_object_kind, template_fingerprint
 
@@ -121,6 +121,16 @@ class ObsidianAdapter:
 
     def store_readable(self, binding: Binding, source: SourceRecord, payload: bytes) -> AdapterResult:
         return self._store_source(binding, source, payload, "readable")
+
+    def store_media(self, binding: Binding, source: SourceRecord, media: MediaArtifact, payload: bytes) -> AdapterResult:
+        if media.source_id != source.source_id:
+            return AdapterResult.failed("source_unreadable", "media does not belong to source", blocked=True)
+        guard = self._write_guard(binding)
+        if guard:
+            return guard
+        assert self._root is not None
+        path = self._root / _ROOT_NAMES["01"] / source.source_id / "media" / media.file_name
+        return self._store_bytes(path, payload, media.media_id, "source_media", f"obsidian://01/{source.source_id}/media")
 
     def write_exception(self, binding: Binding, exception: ExceptionRecord) -> AdapterResult:
         guard = self._write_guard(binding)

@@ -16,6 +16,7 @@ _UNSAFE = (
     re.compile(r"(?:保证|承诺|稳赚|收益)"),
     re.compile(r"\d+(?:[.,]\d+)?(?:%|万|亿|元|人|次|年|月|日)"),
 )
+_HAOZHAI_HEADINGS = ("标题概要", "选题成立", "开头", "推进", "故事与表达", "CTA", "参考方式")
 
 
 def _mechanism(value: object, field_name: str) -> str:
@@ -39,14 +40,32 @@ class MethodRequest:
     expression_mechanism: str
     closing_mechanism: str
     transferable_method: str
+    policy_sections: tuple[tuple[str, str], ...] = ()
+    evidence_pages: tuple[int, ...] = ()
+    policy_id: str = ""
+    policy_receipt: str = ""
 
     def __post_init__(self) -> None:
         if not TASK_ID.fullmatch(self.task_id):
             raise ValueError("task_id must be a real Codex task UUID")
         if self.source.client_id != self.binding.client_id:
             raise ValueError("source must belong to the active binding")
-        for field_name in ("title", "topic", "opening_mechanism", "progression_mechanism", "expression_mechanism", "closing_mechanism", "transferable_method"):
-            _mechanism(getattr(self, field_name), field_name)
+        _mechanism(self.title, "title")
+        if self.policy_id:
+            if self.policy_id != "haozhai-v1" or not re.fullmatch(r"[0-9a-f]{64}", self.policy_receipt):
+                raise ValueError("policy receipt is invalid")
+            if tuple(heading for heading, _content in self.policy_sections) != _HAOZHAI_HEADINGS:
+                raise ValueError("policy sections are invalid")
+            for heading, content in self.policy_sections:
+                if not isinstance(content, str) or not content.strip() or len(content.strip()) > 4000:
+                    raise ValueError(f"{heading} must be a non-empty grounded section")
+                if any(pattern.search(content.strip()) for pattern in _UNSAFE):
+                    raise ValueError(f"{heading} contains identity, case, data, promise or quoted-source content")
+        else:
+            for field_name in ("topic", "opening_mechanism", "progression_mechanism", "expression_mechanism", "closing_mechanism", "transferable_method"):
+                _mechanism(getattr(self, field_name), field_name)
+        if any(not isinstance(page, int) or page < 1 for page in self.evidence_pages):
+            raise ValueError("evidence_pages must contain positive page numbers")
 
 
 @dataclass(frozen=True)
@@ -103,5 +122,14 @@ class Stage7Method:
     def _asset(request: MethodRequest) -> AssetPayload:
         fields = (request.source.source_id, request.title.strip(), request.topic.strip(), request.opening_mechanism.strip(), request.progression_mechanism.strip(), request.expression_mechanism.strip(), request.closing_mechanism.strip(), request.transferable_method.strip())
         asset_id = "MET-" + hashlib.sha256("\n".join(fields).encode("utf-8")).hexdigest()[:16]
-        body = f"# {request.title.strip()}\n\n## 主题\n\n{request.topic.strip()}\n\n## 开头机制\n\n{request.opening_mechanism.strip()}\n\n## 中间推进\n\n{request.progression_mechanism.strip()}\n\n## 表达机制\n\n{request.expression_mechanism.strip()}\n\n## 结尾行动\n\n{request.closing_mechanism.strip()}\n\n## 可迁移方法\n\n{request.transferable_method.strip()}\n\n## 不可照搬\n\n- 身份、案例、数据、承诺和长段原文不进入方法卡。\n\n## 来源\n\n- `{request.source.source_id}`\n"
-        return AssetPayload(asset_id, request.title.strip(), body, request.source.source_id, request.source.source_role, {"topic": request.topic.strip(), "asset_root": "04"})
+        page_lines = "\n".join(f"- `{request.source.source_id}` · 第 {page} 页 · `page-{page:03d}.png`" for page in request.evidence_pages)
+        source_lines = page_lines or f"- `{request.source.source_id}`"
+        if request.policy_sections:
+            sections = "\n\n".join(f"## {heading}\n\n{content}" for heading, content in request.policy_sections)
+            body = f"# {request.title.strip()}\n\n{sections}\n\n## 来源\n\n{source_lines}\n"
+        else:
+            body = f"# {request.title.strip()}\n\n## 主题\n\n{request.topic.strip()}\n\n## 开头机制\n\n{request.opening_mechanism.strip()}\n\n## 中间推进\n\n{request.progression_mechanism.strip()}\n\n## 表达机制\n\n{request.expression_mechanism.strip()}\n\n## 结尾行动\n\n{request.closing_mechanism.strip()}\n\n## 可迁移方法\n\n{request.transferable_method.strip()}\n\n## 不可照搬\n\n- 身份、案例、数据、承诺和长段原文不进入方法卡。\n\n## 来源\n\n{source_lines}\n"
+        metadata = {"topic": request.topic.strip(), "asset_root": "04"}
+        if request.policy_id:
+            metadata.update({"policy_id": request.policy_id, "policy_receipt": request.policy_receipt, "evidence_pages": list(request.evidence_pages)})
+        return AssetPayload(asset_id, request.title.strip(), body, request.source.source_id, request.source.source_role, metadata)

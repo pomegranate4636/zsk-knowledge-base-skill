@@ -13,6 +13,7 @@ from .contracts import (
     Binding,
     BindingRegistry,
     ExceptionRecord,
+    MediaArtifact,
     SourceRecord,
     payload_sha256,
 )
@@ -293,6 +294,11 @@ class FakeAdapter:
 
     def store_readable(self, binding: Binding, source: SourceRecord, payload: bytes) -> AdapterResult:
         return self._store_source("store_readable", binding, source, payload, "readable")
+
+    def store_media(self, binding: Binding, source: SourceRecord, media: MediaArtifact, payload: bytes) -> AdapterResult:
+        if media.source_id != source.source_id:
+            return AdapterResult.failed("source_unreadable", "media does not belong to source", blocked=True)
+        return self._store_source("store_media", binding, source, payload, f"media_page_{media.page_number:03d}")
 
     def write_exception(self, binding: Binding, exception: ExceptionRecord) -> AdapterResult:
         blocked = self._ensure_write("write_exception", binding)

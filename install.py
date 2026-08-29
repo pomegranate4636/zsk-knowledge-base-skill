@@ -20,7 +20,19 @@ COMPONENTS = (
     "markitdown-skill",
     "shared",
 )
+SHARED_REQUIRED_FILES = (
+    "markdown_converter.py",
+    "media_renderer.py",
+    "approval.py",
+    "content_workflow.py",
+    "haozhai_policy.py",
+    "feishu_auth.py",
+    "feishu_publish.py",
+    "runtime_state.py",
+    "zsk_entry.py",
+)
 MARKITDOWN_SPEC = "markitdown[docx,pdf,pptx,xlsx]==0.1.6"
+POWERPOINT_PATH = Path(r"C:\Program Files\Microsoft Office\root\Office16\POWERPNT.EXE")
 
 
 def default_destination() -> Path:
@@ -38,8 +50,9 @@ def validate_source(source_root: Path) -> list[str]:
             errors.append(f"缺少组件目录：{component}")
         if name != "shared" and not (component / "SKILL.md").is_file():
             errors.append(f"缺少 Skill 入口：{component / 'SKILL.md'}")
-    if not (source_root / "shared" / "markdown_converter.py").is_file():
-        errors.append("缺少统一 Markdown 转换模块：shared/markdown_converter.py")
+    for filename in SHARED_REQUIRED_FILES:
+        if not (source_root / "shared" / filename).is_file():
+            errors.append(f"缺少共享核心模块：shared/{filename}")
     return errors
 
 
@@ -49,7 +62,8 @@ def installed_state(destination: Path) -> tuple[list[str], list[str]]:
     for name in COMPONENTS:
         target = destination / name
         valid = target.is_dir() and (
-            (target / "markdown_converter.py").is_file() if name == "shared" else (target / "SKILL.md").is_file()
+            all((target / filename).is_file() for filename in SHARED_REQUIRED_FILES)
+            if name == "shared" else (target / "SKILL.md").is_file()
         )
         (present if valid else missing).append(name)
     return present, missing
@@ -64,6 +78,16 @@ def converter_version() -> str | None:
     except (OSError, subprocess.TimeoutExpired):
         return None
     return completed.stdout.strip() if completed.returncode == 0 and completed.stdout.strip() else None
+
+
+def rich_media_status() -> dict[str, bool]:
+    """Report whether mandatory PDF/PPT page-image and OCR dependencies exist."""
+    pdftoppm = bool(shutil.which("pdftoppm"))
+    powershell = bool(shutil.which("powershell.exe") or shutil.which("powershell"))
+    libreoffice = bool(shutil.which("soffice") or shutil.which("libreoffice"))
+    powerpoint = os.name == "nt" and powershell and POWERPOINT_PATH.is_file()
+    ocr = bool(shutil.which("tesseract")) or (os.name == "nt" and powershell)
+    return {"pdf_pages": pdftoppm, "ppt_pages": pdftoppm and (libreoffice or powerpoint), "ocr": ocr}
 
 
 def install_converter() -> bool:
@@ -139,9 +163,13 @@ def main() -> int:
     if args.doctor:
         present, missing = installed_state(destination)
         version = converter_version()
+        media = rich_media_status()
         print("组件：" + ("齐全" if not missing else "缺少 " + "、".join(missing)))
         print("MarkItDown：" + (version or "不可用"))
-        return 0 if not missing and version else 1
+        print("PDF逐页图片：" + ("可用" if media["pdf_pages"] else "不可用"))
+        print("PPT逐页图片：" + ("可用" if media["ppt_pages"] else "不可用"))
+        print("页面OCR：" + ("可用" if media["ocr"] else "不可用"))
+        return 0 if not missing and version and all(media.values()) else 1
 
     source_root = Path(__file__).resolve().parent / "skills"
     result = install(source_root, destination)

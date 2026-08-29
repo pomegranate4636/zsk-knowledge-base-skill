@@ -42,12 +42,17 @@ class ProfileRequest:
     source: SourceRecord
     subject_name: str
     layers: ProfileLayers
+    evidence_pages: tuple[int, ...] = ()
+    policy_id: str = ""
+    policy_receipt: str = ""
 
     def __post_init__(self) -> None:
         if not TASK_ID.fullmatch(self.task_id):
             raise ValueError("task_id must be a real Codex task UUID")
         if not isinstance(self.subject_name, str) or not self.subject_name.strip():
             raise ValueError("subject_name is required")
+        if any(not isinstance(page, int) or page < 1 for page in self.evidence_pages):
+            raise ValueError("evidence_pages must contain positive page numbers")
 
 
 @dataclass(frozen=True)
@@ -56,9 +61,15 @@ class ProfilePrimary:
     subject_name: str
     source_id: str
     layers: ProfileLayers
+    evidence_pages: tuple[int, ...] = ()
+    policy_id: str = ""
+    policy_receipt: str = ""
 
     def asset(self, source_role: str) -> AssetPayload:
-        return AssetPayload(self.profile_id, f"{self.subject_name} Profile", self.body(), self.source_id, source_role, {"profile_schema": PROFILE_SCHEMA, "primary_status": "active", "asset_root": "05"})
+        metadata = {"profile_schema": PROFILE_SCHEMA, "primary_status": "active", "asset_root": "05"}
+        if self.policy_id:
+            metadata.update({"policy_id": self.policy_id, "policy_receipt": self.policy_receipt, "evidence_pages": list(self.evidence_pages)})
+        return AssetPayload(self.profile_id, f"{self.subject_name} Profile", self.body(), self.source_id, source_role, metadata)
 
     def body(self) -> str:
         def section(title: str, values: tuple[str, ...]) -> str:
@@ -69,7 +80,7 @@ class ProfilePrimary:
             section("确认事实", self.layers.confirmed_facts),
             section("运营设定", self.layers.operating_settings),
             section("候选素材（待确认）", self.layers.candidate_materials),
-            f"## 来源\n\n- `{self.source_id}`",
+            "## 来源\n\n" + ("\n".join(f"- `{self.source_id}` · 第 {page} 页 · `page-{page:03d}.png`" for page in self.evidence_pages) or f"- `{self.source_id}`"),
         )) + "\n"
 
 
@@ -167,7 +178,7 @@ class Stage8Profile:
     @staticmethod
     def _primary(request: ProfileRequest) -> ProfilePrimary:
         profile_id = "PRF-" + hashlib.sha256(request.binding.client_id.encode("utf-8")).hexdigest()[:16]
-        return ProfilePrimary(profile_id, request.subject_name.strip(), request.source.source_id, request.layers)
+        return ProfilePrimary(profile_id, request.subject_name.strip(), request.source.source_id, request.layers, request.evidence_pages, request.policy_id, request.policy_receipt)
 
     @staticmethod
     def _binding_key(binding: Binding) -> str:

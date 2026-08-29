@@ -13,6 +13,7 @@ from .contracts import AdapterResult, BINDING_SCHEMA, ROOT_KEYS, TASK_ID, Bindin
 from .feishu_adapter import FeishuAdapter
 from .feishu_cli import CliResponse, CliRunner, SubprocessCliRunner
 from .obsidian_adapter import ObsidianAdapter
+from .runtime_state import BindingStore, BootstrapConfirmationStore, ReadinessStore
 from .stage2_router import RouterRequest, Stage2Router, classify_intent
 from .templates import TEMPLATE_VERSION
 
@@ -47,15 +48,28 @@ class BootstrapResponse:
     confirmation: str | None
     locator: str | None
     root_refs: tuple[Any, ...] = ()
+    binding: Binding | None = None
 
 
 class FirstRunBootstrap:
     """只在用户明确建库并确认预览后创建；失败不回退到隐式默认位置。"""
 
-    def __init__(self, *, runner: CliRunner | None = None, documents_parent: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        runner: CliRunner | None = None,
+        documents_parent: Path | None = None,
+        runtime_root: Path | None = None,
+        binding_store: BindingStore | None = None,
+        readiness_store: ReadinessStore | None = None,
+        confirmation_store: BootstrapConfirmationStore | None = None,
+    ) -> None:
         self.runner = runner or SubprocessCliRunner()
         self.documents_parent = documents_parent
-        self._issued: set[str] = set()
+        root = runtime_root or Path(__file__).resolve().parents[2] / ".zsk-runtime"
+        self.binding_store = binding_store or BindingStore(root)
+        self.readiness_store = readiness_store or ReadinessStore(root)
+        self.confirmation_store = confirmation_store or BootstrapConfirmationStore(root)
 
     def execute(self, request: BootstrapRequest) -> BootstrapResponse:
         if classify_intent(request.user_input) != "create":
@@ -75,13 +89,11 @@ class FirstRunBootstrap:
                 "readback_failed": "无法确认飞书中是否已有同名知识空间，未创建。",
             }
             return BootstrapResponse("connection_required" if code == "feishu_auth_missing" else "needs_input", code, messages.get(code, "创建前检查未通过，未创建。"), preview, None, None)
-        token = self._token(request.backend_type, client_name, name, preview["target"])
-        if request.confirmation != token:
-            self._issued.add(token)
+        if request.confirmation is None:
+            token = self.confirmation_store.issue(preview)
             return BootstrapResponse("confirmation_required", None, "请确认这个名称和目标位置；确认后才会创建。", preview, token, None)
-        if token not in self._issued:
+        if not self.confirmation_store.consume(request.confirmation, preview):
             return BootstrapResponse("blocked", "confirmation_mismatch", "确认信息无效或已过期，未创建。", preview, None, None)
-        self._issued.remove(token)
         if request.backend_type == "obsidian":
             return self._create_obsidian(client_name, name, Path(preview["target"]))
         return self._create_feishu(client_name, name)
@@ -114,7 +126,8 @@ class FirstRunBootstrap:
         result = self._skeleton(ObsidianAdapter(), binding)
         if result.status != "created":
             return BootstrapResponse("blocked", result.code or "write_failed", "Vault 目录已创建，但知识库结构未完整创建。", {"backend": "obsidian", "name": name, "target": str(target)}, None, str(target), result.root_refs)
-        return BootstrapResponse("created", None, "知识库已创建，可以开始上传资料。", {"backend": "obsidian", "name": name, "target": str(target)}, None, str(target), result.root_refs)
+        self._remember_ready(binding)
+        return BootstrapResponse("created", None, "知识库已创建，可以开始上传资料。", {"backend": "obsidian", "name": name, "target": str(target)}, None, str(target), result.root_refs, binding)
 
     def _create_feishu(self, client_name: str, name: str) -> BootstrapResponse:
         data = {"name": name, "description": "由 ZSK 首次建库创建。", "open_sharing": "closed"}
@@ -130,7 +143,12 @@ class FirstRunBootstrap:
         result = self._skeleton(FeishuAdapter(self.runner), binding)
         if result.status != "created":
             return BootstrapResponse("blocked", result.code or "write_failed", "飞书空间已创建，但知识库结构未完整创建。", {"backend": "feishu", "name": name, "target": locator}, None, locator, result.root_refs)
-        return BootstrapResponse("created", None, "知识库已创建，可以开始上传资料。", {"backend": "feishu", "name": name, "target": locator}, None, locator, result.root_refs)
+        self._remember_ready(binding)
+        return BootstrapResponse("created", None, "知识库已创建，可以开始上传资料。", {"backend": "feishu", "name": name, "target": locator}, None, locator, result.root_refs, binding)
+
+    def _remember_ready(self, binding: Binding) -> None:
+        self.binding_store.save_active(binding)
+        self.readiness_store.mark_ready(binding)
 
     def _feishu_name_exists(self, name: str) -> bool | None:
         response = self.runner.run(("lark-cli", "--as", "user", "wiki", "spaces", "list", "--page-all", "--format", "json"))

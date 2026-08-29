@@ -7,13 +7,14 @@ from dataclasses import dataclass
 import hashlib
 import io
 import json
-from pathlib import PurePath
+from pathlib import Path, PurePath
 import re
 from typing import Any
 
 from .adapter import KnowledgeBaseAdapter
-from .contracts import BINDING_SCHEMA, SOURCE_ROLES, SOURCE_SCHEMA, TASK_ID, BackendObjectRef, Binding, ExceptionRecord, SourceRecord
+from .contracts import BINDING_SCHEMA, SOURCE_ROLES, SOURCE_SCHEMA, TASK_ID, BackendObjectRef, Binding, ExceptionRecord, MediaArtifact, SourceRecord
 from .markdown_converter import ConversionFailed, ConverterUnavailable, MarkdownConversion, convert_to_markdown
+from .media_renderer import MediaRenderFailed, MediaRendererUnavailable, render_pages
 
 
 SUPPORTED_SUFFIXES = frozenset({".md", ".txt", ".csv", ".json", ".html", ".htm", ".docx", ".pptx", ".xlsx", ".pdf"})
@@ -54,6 +55,7 @@ class IntakeRequest:
     original_retention_approved: bool = False
     stable_source_locator: str | None = None
     confirmed_version_of: str | None = None
+    media_output_dir: str | None = None
 
     def __post_init__(self) -> None:
         if not TASK_ID.fullmatch(self.task_id):
@@ -110,6 +112,23 @@ class Stage5Intake:
             return self._exception(request.binding, source_id, "source_unreadable", evidence)
         body = conversion.text
         evidence["conversion"] = {"engine": conversion.engine, "version": conversion.version}
+        media = ()
+        page_count = 0
+        visual_status = "not_required"
+        if suffix in {".pdf", ".pptx"}:
+            if not request.media_output_dir:
+                return self._exception(request.binding, source_id, "conversion_failed", evidence)
+            try:
+                rendered = render_pages(request.payload, suffix, source_id, Path(request.media_output_dir))
+            except (MediaRendererUnavailable, MediaRenderFailed):
+                evidence["visual_processing"] = "blocked"
+                return self._exception(request.binding, source_id, "conversion_failed", evidence)
+            media = rendered.artifacts
+            page_count = rendered.page_count
+            visual_status = "ocr_completed" if media and all(item.ocr_text_sha256 for item in media) else "rendered"
+            if rendered.ocr_markdown.strip():
+                body = body.rstrip() + "\n\n# 逐页 OCR 辅助文本\n\n" + rendered.ocr_markdown
+            evidence["visual_processing"] = {"engine": rendered.engine, "page_count": page_count, "media_count": len(media)}
         sensitive_count = sum(len(pattern.findall(body)) for pattern in _SENSITIVE)
         evidence["privacy"] = {"sensitive_match_count": sensitive_count, "original_retention_approved": request.original_retention_approved}
         if sensitive_count and not request.original_retention_approved:
@@ -132,9 +151,10 @@ class Stage5Intake:
         readable = self._document(request, source_id, digest, privacy_status, version_of, conversion, body)
         record = SourceRecord(
             SOURCE_SCHEMA, source_id, request.binding.client_id, request.source_title.strip(), request.source_role,
-            "table" if suffix in _TABLE_SUFFIXES else "text", request.file_name, digest,
+            self._content_kind(suffix), request.file_name, digest,
             hashlib.sha256(readable).hexdigest(), privacy_status, request.permission_status, version_of,
             "registered", request.original_retention_approved or not sensitive_count,
+            media_artifacts=media, page_count=page_count, visual_processing_status=visual_status,
         )
         original = self.adapter.store_original(request.binding, record, request.payload)
         self._event(evidence, "store_original", original.status, original.code)
@@ -144,7 +164,20 @@ class Stage5Intake:
         self._event(evidence, "store_readable", readable_result.status, readable_result.code)
         if readable_result.status not in {"ok", "reused"}:
             return self._exception(request.binding, source_id, readable_result.code or "write_failed", evidence, original.object_refs)
-        refs = original.object_refs + readable_result.object_refs
+        media_refs: tuple[BackendObjectRef, ...] = ()
+        if media:
+            media_dir = Path(request.media_output_dir or "")
+            for item in media:
+                try:
+                    payload = (media_dir / item.file_name).read_bytes()
+                except OSError:
+                    return self._exception(request.binding, source_id, "write_failed", evidence, original.object_refs + readable_result.object_refs)
+                stored = self.adapter.store_media(request.binding, record, item, payload)
+                self._event(evidence, "store_media", stored.status, stored.code)
+                if stored.status not in {"ok", "reused"}:
+                    return self._exception(request.binding, source_id, stored.code or "write_failed", evidence, original.object_refs + readable_result.object_refs + media_refs)
+                media_refs += stored.object_refs
+        refs = original.object_refs + readable_result.object_refs + media_refs
         readback = self.adapter.read_back(request.binding, refs)
         self._event(evidence, "read_back", readback.status, readback.code)
         if readback.status not in {"ok", "reused"}:
@@ -217,6 +250,16 @@ class Stage5Intake:
     @staticmethod
     def _content_units(suffix: str, body: str) -> tuple[str | None, int | None]:
         return None, None
+
+    @staticmethod
+    def _content_kind(suffix: str) -> str:
+        if suffix == ".pptx":
+            return "presentation"
+        if suffix in _TABLE_SUFFIXES:
+            return "table"
+        if suffix in {".pdf", ".docx"}:
+            return "document"
+        return "text"
 
     @staticmethod
     def _evidence(request: IntakeRequest, suffix: str, source_id: str) -> dict[str, Any]:

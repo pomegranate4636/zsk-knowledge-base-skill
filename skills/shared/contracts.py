@@ -26,6 +26,7 @@ ADAPTER_METHODS = (
     "read_rules",
     "store_original",
     "store_readable",
+    "store_media",
     "write_exception",
     "write_knowledge_asset",
     "write_method_asset",
@@ -122,6 +123,50 @@ class BackendObjectRef:
             "object_kind": self.object_kind,
             "locator": self.locator,
             "version": self.version,
+        }
+
+
+@dataclass(frozen=True)
+class MediaArtifact:
+    """A page-level visual artifact belonging to a registered source."""
+
+    media_id: str
+    source_id: str
+    page_number: int
+    media_type: str
+    file_name: str
+    sha256: str
+    width: int = 0
+    height: int = 0
+    ocr_text_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        _non_empty(self.media_id, "media_id")
+        if not SOURCE_ID.fullmatch(self.source_id):
+            raise ContractError("source_unreadable", "media source_id is invalid")
+        if self.page_number < 1:
+            raise ContractError("source_unreadable", "media page_number must be positive")
+        if self.media_type != "image":
+            raise ContractError("format_unsupported", "media_type must be image")
+        _non_empty(self.file_name, "file_name")
+        if not HEX64.fullmatch(self.sha256):
+            raise ContractError("source_unreadable", "media sha256 must be a SHA256")
+        if self.width < 0 or self.height < 0:
+            raise ContractError("source_unreadable", "media dimensions cannot be negative")
+        if self.ocr_text_sha256 is not None and not HEX64.fullmatch(self.ocr_text_sha256):
+            raise ContractError("source_unreadable", "ocr_text_sha256 must be a SHA256")
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "media_id": self.media_id,
+            "source_id": self.source_id,
+            "page_number": self.page_number,
+            "media_type": self.media_type,
+            "file_name": self.file_name,
+            "sha256": self.sha256,
+            "width": self.width,
+            "height": self.height,
+            "ocr_text_sha256": self.ocr_text_sha256,
         }
 
 
@@ -286,6 +331,9 @@ class SourceRecord:
     status: str
     original_retention_approved: bool = False
     backend_artifacts: Mapping[str, BackendObjectRef] = field(default_factory=dict)
+    media_artifacts: tuple[MediaArtifact, ...] = ()
+    page_count: int = 0
+    visual_processing_status: str = "not_required"
 
     def __post_init__(self) -> None:
         validate_source(self)
@@ -307,6 +355,9 @@ class SourceRecord:
             "status": self.status,
             "original_retention_approved": self.original_retention_approved,
             "backend_artifacts": {key: ref.as_dict() for key, ref in self.backend_artifacts.items()},
+            "media_artifacts": [item.as_dict() for item in self.media_artifacts],
+            "page_count": self.page_count,
+            "visual_processing_status": self.visual_processing_status,
         }
 
 
@@ -342,6 +393,15 @@ def validate_source(source: SourceRecord) -> None:
         raise ContractError("source_unreadable", "backend_artifacts contains an unsupported key")
     if any(not isinstance(ref, BackendObjectRef) for ref in source.backend_artifacts.values()):
         raise ContractError("source_unreadable", "backend_artifacts values must be object references")
+    if any(not isinstance(item, MediaArtifact) or item.source_id != source.source_id for item in source.media_artifacts):
+        raise ContractError("source_unreadable", "media_artifacts must belong to the source")
+    pages = [item.page_number for item in source.media_artifacts]
+    if len(pages) != len(set(pages)):
+        raise ContractError("source_unreadable", "media_artifacts page numbers must be unique")
+    if source.page_count < 0 or (source.page_count and pages and max(pages) > source.page_count):
+        raise ContractError("source_unreadable", "page_count is inconsistent with media_artifacts")
+    if source.visual_processing_status not in {"not_required", "rendered", "ocr_completed", "partial", "blocked"}:
+        raise ContractError("source_unreadable", "visual_processing_status is invalid")
 
 
 @dataclass(frozen=True)

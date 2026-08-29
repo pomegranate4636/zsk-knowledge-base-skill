@@ -4,9 +4,9 @@ from dataclasses import dataclass
 import hashlib
 import json
 import re
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 from urllib.parse import urlsplit
-from .contracts import AdapterResult, AssetPayload, BackendObjectRef, Binding, ExceptionRecord, SourceRecord, ROOT_KEYS
+from .contracts import AdapterResult, AssetPayload, BackendObjectRef, Binding, ExceptionRecord, MediaArtifact, SourceRecord, ROOT_KEYS
 from .feishu_cli import CliRunner, SubprocessCliRunner
 from .feishu_stage5 import FeishuStage5Storage
 from .templates import ROOT_TITLES, root_content
@@ -139,6 +139,9 @@ class FeishuAdapter:
     def store_readable(self, binding: Binding, source: SourceRecord, payload: bytes) -> AdapterResult:
         storage, failure = self._stage5_source_storage(binding, source)
         return self._remember_source(failure or storage.store_readable(source, payload))
+    def store_media(self, binding: Binding, source: SourceRecord, media: MediaArtifact, payload: bytes) -> AdapterResult:
+        storage, failure = self._stage5_source_storage(binding, source)
+        return self._remember_source(failure or storage.store_media(source, media, payload))
     def write_exception(self, binding: Binding, exception: ExceptionRecord) -> AdapterResult:
         storage, failure = self._stage5_storage(binding)
         return failure or storage.write_exception(exception)
@@ -147,14 +150,14 @@ class FeishuAdapter:
             return self._later_stage("write_knowledge_asset")
         storage, failure = self._stage5_storage(binding)
         source = failure or storage.registered_source(asset.source_id, "business_knowledge")
-        body = asset.body.partition("\n\n")[2].encode("utf-8")
+        body = asset.body.encode("utf-8")
         return source if source.status not in {"ok", "reused"} else self._remember_asset(storage.store_document(f"knowledge:{asset.asset_id}", asset.title, storage.root_nodes["03"], body, "knowledge_asset", "feishu://03"))
     def write_method_asset(self, binding: Binding, asset: AssetPayload) -> AdapterResult:
         if not isinstance(asset, AssetPayload):
             return self._later_stage("write_method_asset")
         storage, failure = self._stage5_storage(binding)
         source = failure or storage.registered_source(asset.source_id, "reference_method")
-        body = asset.body.partition("\n\n")[2].encode("utf-8")
+        body = asset.body.encode("utf-8")
         return source if source.status not in {"ok", "reused"} else self._remember_asset(storage.store_document(f"method:{asset.asset_id}", asset.title, storage.root_nodes["04"], body, "method_asset", "feishu://04"))
     def write_profile(self, binding: Binding, asset: AssetPayload) -> AdapterResult:
         if not isinstance(asset, AssetPayload):
@@ -162,6 +165,58 @@ class FeishuAdapter:
         storage, failure = self._stage5_storage(binding)
         source = failure or storage.registered_source(asset.source_id, "profile_material")
         return source if source.status not in {"ok", "reused"} else self._remember_asset(storage.store_document(f"profile:{asset.asset_id}", asset.title, storage.root_nodes["05"], asset.body.encode("utf-8"), "profile", "feishu://05"))
+
+    def publish_source_content(self, binding: Binding, source: SourceRecord, readable: bytes, media_payloads: Mapping[int, bytes]) -> AdapterResult:
+        storage, failure = self._stage5_source_storage(binding, source)
+        if failure:
+            return failure
+        registered = storage.registered_source(source.source_id, source.source_role)
+        if registered.status not in {"ok", "reused"}:
+            return registered
+        pairs, failure = self._media_pairs(source, media_payloads, tuple(item.page_number for item in source.media_artifacts))
+        if failure:
+            return failure
+        result = storage.store_document_with_media(
+            f"{source.source_id}:readable", source.source_id, storage.root_nodes["01"], readable,
+            "source_readable", "feishu://01/readable", source.source_id, pairs, wrapped=True,
+        )
+        return self._remember_source(result)
+
+    def publish_approved_asset(self, binding: Binding, source: SourceRecord, asset: AssetPayload, destination: str, media_payloads: Mapping[int, bytes]) -> AdapterResult:
+        storage, failure = self._stage5_source_storage(binding, source)
+        if failure:
+            return failure
+        role_destination = {"business_knowledge": "03", "reference_method": "04", "profile_material": "05"}
+        if destination != role_destination.get(source.source_role):
+            return AdapterResult.failed("routing_ambiguous", "Source role does not match destination.", blocked=True)
+        registered = storage.registered_source(source.source_id, source.source_role)
+        if registered.status not in {"ok", "reused"}:
+            return registered
+        raw_pages = asset.metadata.get("evidence_pages", [])
+        if not isinstance(raw_pages, list) or any(not isinstance(page, int) for page in raw_pages):
+            return AdapterResult.failed("source_unreadable", "Asset page evidence is invalid.", blocked=True)
+        pairs, failure = self._media_pairs(source, media_payloads, tuple(raw_pages))
+        if failure:
+            return failure
+        kind = {"03": "knowledge_asset", "04": "method_asset", "05": "profile"}[destination]
+        prefix = {"03": "knowledge", "04": "method", "05": "profile"}[destination]
+        result = storage.store_document_with_media(
+            f"{prefix}:{asset.asset_id}", asset.title, storage.root_nodes[destination], asset.body.encode("utf-8"),
+            kind, f"feishu://{destination}", source.source_id, pairs,
+        )
+        return self._remember_asset(result)
+
+    @staticmethod
+    def _media_pairs(source: SourceRecord, media_payloads: Mapping[int, bytes], pages: tuple[int, ...]) -> tuple[tuple[tuple[MediaArtifact, bytes], ...], AdapterResult | None]:
+        artifacts = {item.page_number: item for item in source.media_artifacts}
+        pairs: list[tuple[MediaArtifact, bytes]] = []
+        for page in pages:
+            item = artifacts.get(page)
+            payload = media_payloads.get(page)
+            if item is None or not isinstance(payload, bytes) or hashlib.sha256(payload).hexdigest() != item.sha256:
+                return (), AdapterResult.failed("source_unreadable", "Referenced page image is missing or changed.", blocked=True)
+            pairs.append((item, payload))
+        return tuple(pairs), None
 
     def read_back(self, binding: Binding, refs: Sequence[BackendObjectRef] | None = None) -> AdapterResult:
         guard = self._binding_guard(binding)
@@ -174,10 +229,13 @@ class FeishuAdapter:
         wanted = tuple(refs or tuple(current.values()))
         if not wanted or any(current.get(ref.object_id) != ref for ref in wanted):
             return AdapterResult.failed("readback_failed", "Stable root references changed or are unknown.", blocked=True)
+        document_check = self._stage5.verify_document_refs(wanted) if self._stage5 is not None else AdapterResult.ok()
+        if document_check.status not in {"ok", "reused"}:
+            return document_check
         if any(ref.object_id in self._source_refs for ref in wanted):
-            checks = ("source_write_readback", "payload_sha256", "stable_refs")
+            checks = ("source_write_readback", "payload_sha256", "stable_refs", *document_check.checked)
         elif any(ref.object_id in self._asset_refs for ref in wanted):
-            checks = ("asset_write_readback", "stable_refs")
+            checks = ("asset_write_readback", "stable_refs", *document_check.checked)
         else:
             checks = ("objects_present", "binding_identity", "stable_refs", "docx_content_fingerprints")
         return AdapterResult.ok(*wanted, checked=checks)

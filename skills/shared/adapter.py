@@ -10,6 +10,7 @@ from .contracts import (
     BackendObjectRef,
     Binding,
     ExceptionRecord,
+    MediaArtifact,
     SourceRecord,
 )
 
@@ -28,6 +29,8 @@ class KnowledgeBaseAdapter(Protocol):
     def store_original(self, binding: Binding, source: SourceRecord, payload: bytes) -> AdapterResult: ...
 
     def store_readable(self, binding: Binding, source: SourceRecord, payload: bytes) -> AdapterResult: ...
+
+    def store_media(self, binding: Binding, source: SourceRecord, media: MediaArtifact, payload: bytes) -> AdapterResult: ...
 
     def write_exception(self, binding: Binding, exception: ExceptionRecord) -> AdapterResult: ...
 

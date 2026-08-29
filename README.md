@@ -29,6 +29,14 @@ zsk-knowledge-base-skill（唯一真源）
 
 客户始终只调用 `zsk-router`。`markitdown-skill` 是必装后台能力，不是第二个入库入口。
 
+资料入库有两次彼此独立的内容确认：先确认文件、页数与 03/04/05 分类，再展示正式知识页草稿并确认发布。确认状态由 `zsk_content_confirmation_v1` 跨轮持久保存；最终批准使用 `zsk_publish_approval_v1`，同时绑定草稿 SHA256 和页面图片清单 SHA256。草稿或图片变化后必须重新确认。
+
+本合并版内置可选的 `haozhai-v1` 策略层。它不改变 ZSK 的通用建库、绑定和 Adapter 架构，只在豪宅 Binding 下强制原 Agent 的 03 六类目录、04 七段拆解、05 三层画像、本人事实独立复核、逐字来源校验以及 PDF/PPTX 页面图片回链。实现位于 `skills/shared/haozhai_policy.py`，Router 不得绕过策略层直接生成豪宅正式草稿。
+
+飞书发布使用可恢复事务：先验证两次内容确认，再把逐页图片分别插入 01 来源文档和引用它们的正式知识页；每张图片插入前查重、插入后回读。`zsk_feishu_publish_receipt_v1` 记录来源链接、正式页链接和阶段状态，网络中断后继续未完成阶段。授权缺失时由 Agent 主动打开飞书原始授权页并展示二维码，不让客户执行命令；挑战码不落盘。
+
+`skills/shared/zsk_entry.py` 是唯一运行时门面。首次新建与绑定已有飞书/Obsidian 库都会在九根结构和规则回读成功后保存唯一当前绑定；建库确认、当前绑定、环境就绪、内容确认和发布收据都能跨任务继续。运行态默认位于安装目录 `.zsk-runtime`，只保存非秘密状态与哈希，不保存飞书 token、设备挑战码或客户正文。
+
 ## 课堂上只说这一句话
 
 把下面这句话完整发给 Codex 或 WorkBuddy：
@@ -75,7 +83,7 @@ python3 zsk-knowledge-base-skill/install.py --check
 
 ZSK 不让大模型直接读取 Office 或 PDF。安装包内含 `markitdown-skill`，它是必装配套能力但不是客户业务入口。MD/TXT/CSV 可直接入库；DOCX、PPTX、XLSX、PDF、HTML、JSON 由 Microsoft MarkItDown 在本机转换为唯一正式 `readable.md`。
 
-首次安装后，用最小格式集合安装并检查转换器；不使用 `markitdown[all]`，因为图片 OCR、音视频和联网扩展不属于当前版本：
+首次安装后，用最小格式集合安装并检查转换器；不使用 `markitdown[all]`。PDF/PPTX 的页面图片由本机 Poppler 加 PowerPoint/LibreOffice 渲染，OCR 使用 Tesseract 或 Windows OCR；音视频和联网扩展不属于当前版本：
 
 ```bash
 python3 zsk-knowledge-base-skill/install.py --install-markitdown
@@ -89,13 +97,13 @@ pipx inject --force markitdown 'markitdown[docx,pdf,pptx,xlsx]==0.1.6'
 python3 zsk-knowledge-base-skill/install.py --doctor
 ```
 
-Doctor 未通过时，富文档会准确停止并进入 02；不会静默换用另一套解析器，也不会把资料交给大模型。图片型 PPT/PDF 的逐页图片、OCR 和图文映射属于后续富媒体阶段，当前不处理。
+Doctor 会同时检查 MarkItDown、PDF 逐页图片、PPT 逐页图片和页面 OCR。任何一项未通过时，PDF/PPTX 会准确停止并进入 02，不会只保存文字后伪称完整，也不会把资料交给大模型。
 
 ## 当前范围与后续范围
 
-- 当前：MD、TXT、CSV，以及经 MarkItDown 转换的 DOCX、PPTX、XLSX、PDF、HTML、JSON。
-- 后续富媒体阶段：图片型 PPT/PDF 的逐页图片、OCR、页码证据链。
-- 不在当前范围：零散图片、音视频、图片向量检索、自动图文对应、自动发布。
+- 当前：MD、TXT、CSV，经 MarkItDown 转换的 DOCX、XLSX、HTML、JSON，以及带逐页 PNG、OCR 和页码证据链的 PDF/PPTX。
+- PDF/PPTX：页面图片是主来源证据，Markdown 与 OCR 只用于检索和草稿辅助；页面缺失、顺序异常或 OCR 失败时进入 02。
+- 不在当前范围：零散图片、音视频、图片向量检索和无来源页码的自动图文猜配。
 
 ## 包含的组件
 
@@ -115,7 +123,9 @@ Doctor 未通过时，富文档会准确停止并进入 02；不会静默换用�
 
 上传资料：
 
-> 请使用 zsk-router，把这份 Word 上传到我刚创建的个人知识库。先让我确认你识别到的文件名和使用边界，再入库；完成后请回读并告诉我结果。
+> 请使用 zsk-router，把这份 Word 上传到我刚创建的个人知识库。先给出 03/04/05 分类建议并等我确认，再完整展示正式草稿并等我第二次确认；发布后请回读并告诉我两个链接和收据位置。
+
+更完整的客户步骤见 [使用说明-Codex和WorkBuddy.md](使用说明-Codex和WorkBuddy.md)，迁移落点见 [合并版能力与边界.md](合并版能力与边界.md)。
 
 ## 安全边界
 

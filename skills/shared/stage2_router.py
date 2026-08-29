@@ -1,4 +1,4 @@
-"""阶段 2 的最小公开 Router：建库、状态、入库停止和 06 预览。"""
+"""建库骨架兼容 Router；公开运行入口由 zsk_entry.ZskEntry 提供。"""
 
 from __future__ import annotations
 
@@ -131,7 +131,7 @@ def classify_intent(user_input: str) -> str:
 
 
 class Stage2Router:
-    """只编排当前阶段客户可见路径，不扩展 Adapter 的 12 个方法。"""
+    """供首次建库复用的骨架编排器；不承载完整资料入库流程。"""
 
     def __init__(self, adapter: KnowledgeBaseAdapter, *, now: Callable[[], int] | None = None) -> None:
         self.adapter = adapter
@@ -152,14 +152,14 @@ class Stage2Router:
             "backend": request.backend_type,
             "fake_adapter_only": True,
         }
-        evidence.limitations = ("fake_adapter_only", "real_backends_not_connected", "no_persistent_receipts", "stage_3_not_started")
+        evidence.limitations = ("legacy_skeleton_entry", "full_runtime_owned_by_zsk_entry")
         self._record(evidence, "classify_intent", AdapterResult.ok(checked=(intent,)), "start", "intent_classified")
         if intent == "routing_ambiguous":
             return self._finish(evidence, intent, "blocked", "routing_ambiguous", None, {}, (), None, "routing_ambiguous", "检测到多个任务模式；请只说明一个当前动作。", blocked=True)
         if intent == "needs_clarification":
             return self._finish(evidence, intent, "needs_clarification", "routing_ambiguous", None, {}, (), None, "needs_clarification", "未识别建库、入库、状态或更新 06；请明确当前动作。")
         if intent == "ingest":
-            return self._finish(evidence, intent, "unavailable", "source_unreadable", None, {}, (), None, "stage5_file_required", "阶段 5 入库需要显式文件输入；未写入 01—05。")
+            return self._finish(evidence, intent, "unavailable", "source_unreadable", None, {}, (), None, "stage5_file_required", "这个兼容入口不携带文件；资料入库由 ZskEntry.ingest 接收显式附件。")
         if request.backend_type not in SUPPORTED_BACKENDS:
             return self._finish(evidence, intent, "blocked", "backend_unsupported", None, {}, (), None, "backend_unsupported", "后端不在阶段 2 的飞书/Obsidian范围内。", blocked=True)
         if locator_has_credential(request.backend_locator):
@@ -264,7 +264,7 @@ class Stage2Router:
                 "execution_mode": "real_feishu",
                 "real_backend_connected": False,
             }
-            evidence.limitations = ("no_persistent_receipts", "ingest_not_implemented", "obsidian_backend_not_connected")
+            evidence.limitations = ("skeleton_only", "content_flow_owned_by_zsk_entry")
             return
         if backend_type == "obsidian":
             evidence.phase_id = REAL_OBSIDIAN_PHASE_ID
@@ -276,7 +276,7 @@ class Stage2Router:
                 "execution_mode": "real_obsidian",
                 "real_backend_connected": False,
             }
-            evidence.limitations = ("no_persistent_receipts", "ingest_not_implemented")
+            evidence.limitations = ("skeleton_only", "content_flow_owned_by_zsk_entry")
 
     @staticmethod
     def _is_real_feishu(evidence: RunEvidence) -> bool:

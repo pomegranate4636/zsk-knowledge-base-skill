@@ -15,7 +15,7 @@ metadata:
 ## ZSK 使用边界
 
 - ZSK 对 DOCX、PPTX、XLSX、PDF、HTML、JSON 的正式可读版只使用 MarkItDown；MD、TXT、CSV 走轻量本地规范化。
-- 只做本地文字转换，不启用插件、Azure Document Intelligence、外部 URL、图片 OCR、音视频转写或 LLM 图片描述。
+- MarkItDown 只做本地文字转换，不启用插件、Azure Document Intelligence、外部 URL、音视频转写或 LLM 图片描述；PDF/PPTX 的页面图片和 OCR 由 ZSK `shared/media_renderer.py` 独立完成。
 - 转换结果为空、损坏或转换器不可用时，ZSK 只写 02 的安全异常，不保存原件或正文。
 - 不把 Markdown 转换结果直接当业务事实；后续 03、04、05 仍必须走来源、隐私和路由 Gate。
 
@@ -31,4 +31,4 @@ markitdown document.pdf -o readable.md
 python3 install.py --install-markitdown
 ```
 
-图片型 PPT/PDF 的逐页图片、OCR 和图文映射不是当前能力，留在后续富媒体阶段。
+PDF/PPTX 的逐页图片、OCR 和页码媒体记录是当前 ZSK 入库必需能力；MarkItDown 的文字结果只作为检索和草稿辅助。零散图片、图片向量检索和无页码自动图文猜配仍不在当前范围。

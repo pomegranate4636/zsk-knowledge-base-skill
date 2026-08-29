@@ -11,9 +11,11 @@ description: 通用知识库的来源登记职责。负责来源身份、可读�
 
 ## 统一 Markdown 转换
 
-MD、TXT 原样规范化，CSV 严格转 Markdown 表格；JSON、HTML/HTM、DOCX、PPTX、XLSX、PDF 一律由本机 Microsoft MarkItDown 转为唯一正式 `readable.md`。转换不联网、不调用大模型；MarkItDown 不可运行、输出为空或转换失败时，只写 02 的安全说明，不保存原件或正文。旧版二进制 Office（.doc/.xls/.ppt）、图片、音视频仍准确停止。
+MD、TXT 原样规范化，CSV 严格转 Markdown 表格；JSON、HTML/HTM、DOCX、XLSX 由本机 Microsoft MarkItDown 转为正式 `readable.md`。PDF/PPTX 还必须生成完整逐页 PNG、OCR 文本和页码媒体记录，页面图片是主证据。转换不联网、不调用大模型；文字转换、页面渲染、OCR 或页数校验任一失败时只写 02 安全说明。旧版二进制 Office（.doc/.xls/.ppt）、零散图片和音视频仍准确停止。
 
 `source_id` 使用原件 SHA256；通过权限与隐私 Gate 后，在 01 create-only 分开保存保留安全扩展名的原件和带来源记录的可读 Markdown。可读版必须记录转换器名称和版本。异常只在 02 保存固定安全说明。只返回 `registered / reused / exception`，不判断 03/04/05。
+
+登记成功不等于正式入库。Router 必须先让客户确认文件、页数和 03/04/05 去向，再调用对应资产职责生成完整草稿；客户第二次确认后才能形成正式发布批准。`zsk-ruku` 不得自行代替任何一次确认。
 
 ## 停止条件
 

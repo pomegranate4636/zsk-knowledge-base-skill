@@ -19,6 +19,11 @@ class KnowledgeRequest:
     facts: str
     applicability: str = ""
     cautions: str = ""
+    category_id: str = ""
+    policy_summary: str = ""
+    evidence_pages: tuple[int, ...] = ()
+    policy_id: str = ""
+    policy_receipt: str = ""
 
     def __post_init__(self) -> None:
         if not TASK_ID.fullmatch(self.task_id):
@@ -27,6 +32,8 @@ class KnowledgeRequest:
             raise ValueError("source must belong to the active binding")
         if not all(isinstance(value, str) and value.strip() for value in (self.title, self.topic, self.facts)):
             raise ValueError("title, topic and facts are required")
+        if any(not isinstance(page, int) or page < 1 for page in self.evidence_pages):
+            raise ValueError("evidence_pages must contain positive page numbers")
 
 
 @dataclass(frozen=True)
@@ -82,5 +89,15 @@ class Stage6Knowledge:
         asset_id = "KNO-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
         applicability = request.applicability.strip() or "仅在来源所述场景中使用。"
         cautions = request.cautions.strip() or "不得补充来源未说明的事实或承诺。"
-        body = f"# {request.title.strip()}\n\n## 主题\n\n{request.topic.strip()}\n\n## 核心知识\n\n{request.facts.strip()}\n\n## 适用范围\n\n{applicability}\n\n## 使用边界\n\n{cautions}\n\n## 来源\n\n- `{request.source.source_id}`\n"
-        return AssetPayload(asset_id, request.title.strip(), body, request.source.source_id, request.source.source_role, {"topic": request.topic.strip()})
+        page_lines = "\n".join(f"- `{request.source.source_id}` · 第 {page} 页 · `page-{page:03d}.png`" for page in request.evidence_pages)
+        source_lines = page_lines or f"- `{request.source.source_id}`"
+        if request.policy_id:
+            body = f"# {request.title.strip()}\n\n## 总摘要\n\n{request.policy_summary.strip()}\n\n## 知识卡清单\n\n{request.facts.strip()}\n\n## 适用提醒\n\n{applicability}\n\n## 来源\n\n{source_lines}\n"
+        else:
+            body = f"# {request.title.strip()}\n\n## 主题\n\n{request.topic.strip()}\n\n## 核心知识\n\n{request.facts.strip()}\n\n## 适用范围\n\n{applicability}\n\n## 使用边界\n\n{cautions}\n\n## 来源\n\n{source_lines}\n"
+        metadata = {"topic": request.topic.strip()}
+        if request.category_id:
+            metadata["category_id"] = request.category_id
+        if request.policy_id:
+            metadata.update({"policy_id": request.policy_id, "policy_receipt": request.policy_receipt, "evidence_pages": list(request.evidence_pages)})
+        return AssetPayload(asset_id, request.title.strip(), body, request.source.source_id, request.source.source_role, metadata)
