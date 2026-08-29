@@ -89,12 +89,12 @@ pipx inject --force markitdown 'markitdown[docx,pdf,pptx,xlsx]==0.1.6'
 python3 zsk-knowledge-base-skill/install.py --doctor
 ```
 
-Doctor 未通过时，富文档会准确停止并进入 02；不会静默换用另一套解析器，也不会把资料交给大模型。图片型 PPT/PDF 的逐页图片、OCR 和图文映射属于后续富媒体阶段，当前不处理。
+Doctor 未通过时，富文档会准确停止并进入 02；不会静默换用另一套解析器，也不会把资料交给大模型。图片 OCR、PDF 图文映射和自动图文对应属于后续阶段。房地产 PPT 的完整逐页幻灯片保留是例外：它们必须作为 01 来源证据逐页渲染、计数并回读，不能只保留文字或拆分内嵌图片。
 
 ## 当前范围与后续范围
 
-- 当前：MD、TXT、CSV，以及经 MarkItDown 转换的 DOCX、PPTX、XLSX、PDF、HTML、JSON。
-- 后续富媒体阶段：图片型 PPT/PDF 的逐页图片、OCR、页码证据链。
+- 当前：MD、TXT、CSV，以及经 MarkItDown 转换的 DOCX、PPTX、XLSX、PDF、HTML、JSON；房地产 PPT 同时保留完整逐页幻灯片图片作为来源证据。
+- 后续富媒体阶段：PDF 的逐页图片、OCR、图片向量检索、自动图文对应。
 - 不在当前范围：零散图片、音视频、图片向量检索、自动图文对应、自动发布。
 
 ## 包含的组件
