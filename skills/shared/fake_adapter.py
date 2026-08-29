@@ -13,6 +13,7 @@ from .contracts import (
     Binding,
     BindingRegistry,
     ExceptionRecord,
+    PageArtifact,
     SourceRecord,
     payload_sha256,
 )
@@ -293,6 +294,36 @@ class FakeAdapter:
 
     def store_readable(self, binding: Binding, source: SourceRecord, payload: bytes) -> AdapterResult:
         return self._store_source("store_readable", binding, source, payload, "readable")
+
+    def store_page_evidence(self, binding: Binding, source: SourceRecord, page: PageArtifact, payload: bytes) -> AdapterResult:
+        blocked = self._ensure_write("store_page_evidence", binding)
+        if blocked:
+            return blocked
+        if source.client_id != binding.client_id or page.source_id != source.source_id or page not in source.page_artifacts:
+            return AdapterResult.failed("binding_conflict", "page evidence does not belong to the active source", blocked=True)
+        digest = payload_sha256(payload)
+        if digest != page.sha256:
+            return AdapterResult.failed("source_unreadable", "page payload hash does not match its manifest", blocked=True)
+        key = f"source:{source.source_id}:page:{page.page_number:03d}"
+        existing = self._objects.get(key)
+        if existing is not None:
+            if existing["payload_sha256"] == digest:
+                return AdapterResult.reused(self._ref(key), checked=("page_number", "payload_sha256", "source_id"))
+            return AdapterResult.failed("version_conflict", "page evidence cannot overwrite prior content", blocked=True)
+        ref = self._store_object(
+            key,
+            "source_page",
+            {
+                "source_id": source.source_id,
+                "client_id": source.client_id,
+                "binding_id": binding.client_id,
+                "source_role": source.source_role,
+                "payload_sha256": digest,
+                "payload_fingerprint": digest,
+                "payload": payload,
+            },
+        )
+        return AdapterResult.ok(ref, checked=("create_only", "page_number", "payload_sha256", "source_id"))
 
     def write_exception(self, binding: Binding, exception: ExceptionRecord) -> AdapterResult:
         blocked = self._ensure_write("write_exception", binding)

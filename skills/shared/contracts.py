@@ -26,6 +26,7 @@ ADAPTER_METHODS = (
     "read_rules",
     "store_original",
     "store_readable",
+    "store_page_evidence",
     "write_exception",
     "write_knowledge_asset",
     "write_method_asset",
@@ -45,6 +46,8 @@ ERROR_CODES = frozenset(
         "source_unreadable",
         "format_unsupported",
         "conversion_failed",
+        "page_evidence_unavailable",
+        "page_evidence_failed",
         "privacy_blocked",
         "privacy_approval_required",
         "ownership_unknown",
@@ -122,6 +125,39 @@ class BackendObjectRef:
             "object_kind": self.object_kind,
             "locator": self.locator,
             "version": self.version,
+        }
+
+
+@dataclass(frozen=True)
+class PageArtifact:
+    """一个已登记来源的完整页面证据。"""
+
+    page_id: str
+    source_id: str
+    page_number: int
+    file_name: str
+    sha256: str
+
+    def __post_init__(self) -> None:
+        _non_empty(self.page_id, "page_id")
+        if not SOURCE_ID.fullmatch(self.source_id):
+            raise ContractError("source_unreadable", "page source_id is invalid")
+        if self.page_number < 1:
+            raise ContractError("source_unreadable", "page_number must be positive")
+        if self.page_id != f"{self.source_id}-PAGE-{self.page_number:03d}":
+            raise ContractError("source_unreadable", "page_id must match source and page number")
+        if self.file_name != f"page-{self.page_number:03d}.png":
+            raise ContractError("source_unreadable", "page file name must match its page number")
+        if not HEX64.fullmatch(self.sha256):
+            raise ContractError("source_unreadable", "page sha256 must be a SHA256")
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "page_id": self.page_id,
+            "source_id": self.source_id,
+            "page_number": self.page_number,
+            "file_name": self.file_name,
+            "sha256": self.sha256,
         }
 
 
@@ -286,6 +322,9 @@ class SourceRecord:
     status: str
     original_retention_approved: bool = False
     backend_artifacts: Mapping[str, BackendObjectRef] = field(default_factory=dict)
+    page_evidence_mode: str = "off"
+    page_count: int = 0
+    page_artifacts: tuple[PageArtifact, ...] = ()
 
     def __post_init__(self) -> None:
         validate_source(self)
@@ -307,6 +346,9 @@ class SourceRecord:
             "status": self.status,
             "original_retention_approved": self.original_retention_approved,
             "backend_artifacts": {key: ref.as_dict() for key, ref in self.backend_artifacts.items()},
+            "page_evidence_mode": self.page_evidence_mode,
+            "page_count": self.page_count,
+            "page_artifacts": [item.as_dict() for item in self.page_artifacts],
         }
 
 
@@ -342,6 +384,16 @@ def validate_source(source: SourceRecord) -> None:
         raise ContractError("source_unreadable", "backend_artifacts contains an unsupported key")
     if any(not isinstance(ref, BackendObjectRef) for ref in source.backend_artifacts.values()):
         raise ContractError("source_unreadable", "backend_artifacts values must be object references")
+    if source.page_evidence_mode not in {"off", "required"}:
+        raise ContractError("source_unreadable", "page_evidence_mode is invalid")
+    if any(not isinstance(item, PageArtifact) or item.source_id != source.source_id for item in source.page_artifacts):
+        raise ContractError("source_unreadable", "page artifacts must belong to the source")
+    pages = [item.page_number for item in source.page_artifacts]
+    if source.page_evidence_mode == "off":
+        if source.page_count != 0 or source.page_artifacts:
+            raise ContractError("source_unreadable", "page evidence must be empty when disabled")
+    elif source.page_count < 1 or pages != list(range(1, source.page_count + 1)):
+        raise ContractError("page_evidence_failed", "page evidence must be complete, ordered, and contiguous")
 
 
 @dataclass(frozen=True)

@@ -18,6 +18,7 @@ metadata:
 - 只做本地文字转换，不启用插件、Azure Document Intelligence、外部 URL、图片 OCR、音视频转写或 LLM 图片描述。
 - 转换结果为空、损坏或转换器不可用时，ZSK 只写 02 的安全异常，不保存原件或正文。
 - 不把 Markdown 转换结果直接当业务事实；后续 03、04、05 仍必须走来源、隐私和路由 Gate。
+- PPTX 中 MarkItDown 生成的页码注释会规范为可见的 `## 第 N 页`，方便回链原页。
 
 ## 独立转换
 
@@ -31,4 +32,4 @@ markitdown document.pdf -o readable.md
 python3 install.py --install-markitdown
 ```
 
-图片型 PPT/PDF 的逐页图片、OCR 和图文映射不是当前能力，留在后续富媒体阶段。
+ZSK 可在用户明确要求且完成原件保存授权后，为 PDF/PPTX 启用独立的完整页证据模式。该模式由 shared 页渲染器负责，不改变 MarkItDown 的文字转换职责；OCR 和自动图文映射仍不在当前能力内。

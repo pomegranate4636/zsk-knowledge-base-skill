@@ -8,7 +8,7 @@ from pathlib import Path, PurePath
 import stat
 from typing import Sequence
 
-from .contracts import AdapterResult, AssetPayload, BackendObjectRef, Binding, ExceptionRecord, SourceRecord, ROOT_KEYS
+from .contracts import AdapterResult, AssetPayload, BackendObjectRef, Binding, ExceptionRecord, PageArtifact, SourceRecord, ROOT_KEYS
 from .obsidian_stage6 import ObsidianStage6Storage
 from .templates import ROOT_TITLES, root_content, root_object_kind, template_fingerprint
 
@@ -121,6 +121,36 @@ class ObsidianAdapter:
 
     def store_readable(self, binding: Binding, source: SourceRecord, payload: bytes) -> AdapterResult:
         return self._store_source(binding, source, payload, "readable")
+
+    def store_page_evidence(self, binding: Binding, source: SourceRecord, page: PageArtifact, payload: bytes) -> AdapterResult:
+        guard = self._write_guard(binding)
+        if guard:
+            return guard
+        if source.client_id != binding.client_id or page.source_id != source.source_id or page not in source.page_artifacts:
+            return AdapterResult.failed("binding_conflict", "Page evidence does not belong to the active source.", blocked=True)
+        if hashlib.sha256(payload).hexdigest() != page.sha256:
+            return AdapterResult.failed("source_unreadable", "Page payload hash does not match its manifest.", blocked=True)
+        assert self._root is not None
+        page_dir = self._root / _ROOT_NAMES["01"] / source.source_id / "pages"
+        try:
+            if page_dir.exists():
+                mode = os.lstat(page_dir).st_mode
+                if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+                    return AdapterResult.failed("structure_conflict", "Page evidence directory type is invalid.", blocked=True)
+            else:
+                os.mkdir(page_dir, 0o700)
+        except OSError:
+            return AdapterResult.failed("write_failed", "Page evidence directory cannot be created safely.")
+        name = f"page-{page.page_number:03d}-{page.sha256[:16]}.png"
+        path = page_dir / name
+        result = self._store_bytes(
+            path, payload, page.page_id, "source_page", f"obsidian://01/{source.source_id}/pages"
+        )
+        if result.status in {"ok", "reused"}:
+            for ref in result.object_refs:
+                self._source_refs[ref.object_id] = ref
+                self._source_paths[ref.object_id] = path
+        return result
 
     def write_exception(self, binding: Binding, exception: ExceptionRecord) -> AdapterResult:
         guard = self._write_guard(binding)
