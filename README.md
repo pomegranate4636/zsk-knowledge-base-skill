@@ -102,7 +102,7 @@ Doctor 未通过时，富文档会准确停止并进入 02；不会静默换用�
 ## 当前范围与后续范围
 
 - 当前默认：MD、TXT、CSV，以及经 MarkItDown 转换的 DOCX、PPTX、XLSX、PDF、HTML、JSON。
-- 当前可选：PDF/PPTX 完整页图、连续页码、页图 SHA256、01 Manifest 和写后回读。启用时需要 `pdftoppm`、`pdfinfo`；PPTX 还需要 LibreOffice。
+- 当前可选：PDF/PPTX 完整页图、连续页码、页图 SHA256、01 Manifest 和写后回读。启用时需要 `pdftoppm`、`pdfinfo`。macOS 已安装 Microsoft PowerPoint 时优先使用 PowerPoint 原生导出；首次运行可能出现 macOS 自动化授权提示。没有 PowerPoint 时使用 LibreOffice；PowerPoint 已存在但原生导出失败时停止，不静默降级。
 - 不在当前范围：OCR、零散图片、音视频、图片向量检索、自动图文对应、自动发布。
 
 ## 包含的组件

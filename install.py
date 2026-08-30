@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import platform
 import shutil
 import subprocess
 import sys
@@ -22,6 +23,7 @@ COMPONENTS = (
 )
 MARKITDOWN_SPEC = "markitdown[docx,pdf,pptx,xlsx]==0.1.6"
 MARKITDOWN_INSTALL_TIMEOUT_SECONDS = 600
+MAC_POWERPOINT = Path("/Applications/Microsoft PowerPoint.app")
 
 
 def default_destination() -> Path:
@@ -122,10 +124,19 @@ def rollback_fresh_install(destination: Path) -> None:
             shutil.rmtree(target)
 
 
-def page_evidence_status() -> dict[str, bool]:
+def page_evidence_status() -> dict[str, bool | str | None]:
     pdf_ready = _optional_binary_ready(("pdftoppm",), ("-v",)) and _optional_binary_ready(("pdfinfo",), ("-v",))
-    ppt_ready = bool(pdf_ready and _optional_binary_ready(("soffice", "libreoffice"), ("--version",)))
-    return {"pdf": pdf_ready, "pptx": ppt_ready}
+    if _mac_powerpoint_ready():
+        ppt_engine = "Microsoft PowerPoint"
+    elif _optional_binary_ready(("soffice", "libreoffice"), ("--version",)):
+        ppt_engine = "LibreOffice"
+    else:
+        ppt_engine = None
+    return {"pdf": pdf_ready, "pptx": bool(pdf_ready and ppt_engine), "pptx_engine": ppt_engine}
+
+
+def _mac_powerpoint_ready() -> bool:
+    return platform.system() == "Darwin" and MAC_POWERPOINT.is_dir() and shutil.which("osascript") is not None
 
 
 def _optional_binary_ready(names: tuple[str, ...], version_args: tuple[str, ...]) -> bool:
@@ -210,7 +221,8 @@ def main() -> int:
         pages = page_evidence_status()
         print("组件：" + ("齐全" if not missing else "缺少 " + "、".join(missing)))
         print("MarkItDown：" + (version or "不可用"))
-        print("页级证据（可选）：PDF " + ("可用" if pages["pdf"] else "不可用") + "；PPTX " + ("可用" if pages["pptx"] else "不可用"))
+        pptx_state = "不可用" if not pages["pptx"] else f"可用（{pages['pptx_engine']}）"
+        print("页级证据（可选）：PDF " + ("可用" if pages["pdf"] else "不可用") + "；PPTX " + pptx_state)
         return 0 if not missing and version else 1
 
     source_root = Path(__file__).resolve().parent / "skills"

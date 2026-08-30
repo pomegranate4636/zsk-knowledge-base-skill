@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import os
+import platform
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
+import uuid
 
 from .contracts import PageArtifact
 
@@ -36,13 +40,52 @@ class RenderedPages:
 _PAGE_NAME = re.compile(r"^page-(\d+)\.png$", re.IGNORECASE)
 _PDFINFO_PAGES = re.compile(r"(?m)^Pages:\s*(\d+)\s*$")
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+_MAC_POWERPOINT = Path("/Applications/Microsoft PowerPoint.app")
+_POWERPOINT_EXPORT_SCRIPT = r'''
+on run argv
+    set inputPath to POSIX file (item 1 of argv) as alias
+    set outputPosix to item 2 of argv
+    set outputPath to (get POSIX file outputPosix as string)
+    set openedPresentation to missing value
+    try
+        tell application "Microsoft PowerPoint"
+            launch
+            open inputPath
+            repeat 60 times
+                try
+                    if (count of slides of active presentation) > 0 then
+                        set openedPresentation to active presentation
+                        exit repeat
+                    end if
+                end try
+                delay 0.5
+            end repeat
+            if openedPresentation is missing value then error "PowerPoint did not finish opening the presentation"
+            set slideCount to count of slides of openedPresentation
+            save openedPresentation in outputPath as save as PDF
+        end tell
+        repeat 120 times
+            if (do shell script "test -s " & quoted form of outputPosix & " && echo yes || echo no") is "yes" then exit repeat
+            delay 0.5
+        end repeat
+        if (do shell script "test -s " & quoted form of outputPosix & " && echo yes || echo no") is not "yes" then error "PowerPoint produced no PDF"
+        tell application "Microsoft PowerPoint" to close openedPresentation
+        return slideCount
+    on error errText number errNumber
+        try
+            if openedPresentation is not missing value then tell application "Microsoft PowerPoint" to close openedPresentation
+        end try
+        error errText number errNumber
+    end try
+end run
+'''
 
 
 def renderer_status(suffix: str) -> tuple[bool, tuple[str, ...]]:
     """返回指定格式的可选页级证据依赖状态。"""
     suffix = suffix.lower()
     required = ["pdftoppm", "pdfinfo"]
-    if suffix == ".pptx":
+    if suffix == ".pptx" and not _find_mac_powerpoint_automation():
         required.append("soffice/libreoffice")
     missing = tuple(name for name in required if not _find_dependency(name))
     return not missing, missing
@@ -67,8 +110,8 @@ def render_page_evidence(payload: bytes, suffix: str, source_id: str, work_root:
     pdf = source
     engines: list[str] = []
     if suffix == ".pptx":
-        pdf = _pptx_to_pdf(source, source_root)
-        engines.append("libreoffice")
+        pdf, pptx_engine = _pptx_to_pdf(source, source_root)
+        engines.append(pptx_engine)
     expected_count = _pdf_page_count(pdf)
     pdftoppm = _find_dependency("pdftoppm")
     assert pdftoppm is not None
@@ -103,7 +146,53 @@ def render_page_evidence(payload: bytes, suffix: str, source_id: str, work_root:
     return RenderedPages(tuple(rendered), expected_count, "+".join(engines))
 
 
-def _pptx_to_pdf(source: Path, work_root: Path) -> Path:
+def _pptx_to_pdf(source: Path, work_root: Path) -> tuple[Path, str]:
+    osascript = _find_mac_powerpoint_automation()
+    if osascript:
+        return _pptx_to_pdf_with_powerpoint_mac(source, work_root, osascript), "microsoft-powerpoint"
+    return _pptx_to_pdf_with_libreoffice(source, work_root), "libreoffice"
+
+
+def _pptx_to_pdf_with_powerpoint_mac(source: Path, work_root: Path, osascript: str) -> Path:
+    cache_root = Path.home() / "Library" / "Caches" / "ZSKPowerPointRenderer"
+    try:
+        cache_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        mode = os.lstat(cache_root).st_mode
+        if not _is_safe_directory(mode):
+            raise PageRenderFailed("PowerPoint render cache is not a safe directory")
+        os.chmod(cache_root, 0o700)
+    except OSError as exc:
+        raise PageRenderFailed("PowerPoint render cache cannot be created") from exc
+    cache_pdf = cache_root / f"{uuid.uuid4().hex}.pdf"
+    target_pdf = work_root / "source.pdf"
+    try:
+        completed = subprocess.run(
+            (osascript, "-e", _POWERPOINT_EXPORT_SCRIPT, str(source), str(cache_pdf)),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if completed.returncode != 0:
+            denied = "-1743" in completed.stderr or "not authorized to send apple events" in completed.stderr.lower()
+            if denied:
+                raise PageRendererUnavailable("macOS automation permission is required for Microsoft PowerPoint")
+            raise PageRenderFailed("Microsoft PowerPoint PDF export failed")
+        if not cache_pdf.is_file() or cache_pdf.stat().st_size == 0:
+            raise PageRenderFailed("Microsoft PowerPoint produced no PDF")
+        shutil.move(str(cache_pdf), target_pdf)
+    except subprocess.TimeoutExpired as exc:
+        raise PageRenderFailed("Microsoft PowerPoint PDF export timed out") from exc
+    except OSError as exc:
+        raise PageRenderFailed("Microsoft PowerPoint PDF cannot be read") from exc
+    finally:
+        cache_pdf.unlink(missing_ok=True)
+    return target_pdf
+
+
+def _pptx_to_pdf_with_libreoffice(source: Path, work_root: Path) -> Path:
     soffice = _find_dependency("soffice/libreoffice")
     if not soffice:
         raise PageRendererUnavailable("LibreOffice is required for PPTX page evidence")
@@ -130,6 +219,16 @@ def _pptx_to_pdf(source: Path, work_root: Path) -> Path:
     if not pdf.is_file():
         raise PageRenderFailed("PPTX conversion produced no PDF")
     return pdf
+
+
+def _find_mac_powerpoint_automation() -> str | None:
+    if platform.system() != "Darwin" or not _MAC_POWERPOINT.is_dir():
+        return None
+    return shutil.which("osascript")
+
+
+def _is_safe_directory(mode: int) -> bool:
+    return not stat.S_ISLNK(mode) and stat.S_ISDIR(mode)
 
 
 def _pdf_page_count(pdf: Path) -> int:

@@ -25,7 +25,7 @@ PDF/PPTX 默认不生成页图。只有 Router 明确传入 `page_evidence_mode=
 - Obsidian 按 `source_id/pages/` 隔离；飞书文件名同时包含 `source_id`、页码和页图哈希。
 - 任一依赖缺失、缺页、重复、错序、写入或回读失败时进入 02，不能报告登记成功。
 
-当前页级证据只保存完整页图，不做 OCR、图片描述、图片检索、自动图文匹配或行业分类。
+当前页级证据只保存完整页图，不做 OCR、图片描述、图片检索、自动图文匹配或行业分类。PPTX 在 macOS 有 Microsoft PowerPoint 时优先走原生 PowerPoint 导出并记录渲染器；否则使用 LibreOffice。原生渲染器已存在但执行失败时停止，不静默降级。
 
 ## 停止条件
 

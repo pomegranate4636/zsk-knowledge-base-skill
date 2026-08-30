@@ -178,6 +178,30 @@ class PageEvidenceStorageTests(unittest.TestCase):
 
 
 class PageRendererContractTests(unittest.TestCase):
+    @mock.patch("shared.page_renderer._find_dependency", side_effect=lambda name: "/usr/bin/tool" if name in {"pdftoppm", "pdfinfo"} else None)
+    @mock.patch("shared.page_renderer._find_mac_powerpoint_automation", return_value="/usr/bin/osascript")
+    def test_mac_powerpoint_satisfies_pptx_renderer_status(self, _powerpoint, _dependency) -> None:
+        self.assertEqual(page_renderer.renderer_status(".pptx"), (True, ()))
+
+    @mock.patch("shared.page_renderer._pptx_to_pdf_with_libreoffice")
+    @mock.patch("shared.page_renderer._pptx_to_pdf_with_powerpoint_mac")
+    @mock.patch("shared.page_renderer._find_mac_powerpoint_automation", return_value="/usr/bin/osascript")
+    def test_mac_powerpoint_is_preferred_for_pptx(self, _automation, power_point, libreoffice) -> None:
+        source = Path("/tmp/source.pptx")
+        target = Path("/tmp/source.pdf")
+        power_point.return_value = target
+        self.assertEqual(page_renderer._pptx_to_pdf(source, Path("/tmp")), (target, "microsoft-powerpoint"))
+        power_point.assert_called_once_with(source, Path("/tmp"), "/usr/bin/osascript")
+        libreoffice.assert_not_called()
+
+    @mock.patch("shared.page_renderer._pptx_to_pdf_with_libreoffice")
+    @mock.patch("shared.page_renderer._pptx_to_pdf_with_powerpoint_mac", side_effect=PageRenderFailed("native failed"))
+    @mock.patch("shared.page_renderer._find_mac_powerpoint_automation", return_value="/usr/bin/osascript")
+    def test_native_powerpoint_failure_does_not_silently_fallback(self, _automation, _powerpoint, libreoffice) -> None:
+        with self.assertRaises(PageRenderFailed):
+            page_renderer._pptx_to_pdf(Path("/tmp/source.pptx"), Path("/tmp"))
+        libreoffice.assert_not_called()
+
     @mock.patch("shared.page_renderer._pdf_page_count", return_value=2)
     @mock.patch("shared.page_renderer.renderer_status", return_value=(True, ()))
     @mock.patch("shared.page_renderer._find_dependency", return_value="pdftoppm")

@@ -61,6 +61,13 @@ class InstallDoctorTests(unittest.TestCase):
         self.assertIn("network interrupted", rendered)
         self.assertIn("download started", rendered)
 
+    def test_doctor_prefers_native_powerpoint_on_mac(self) -> None:
+        with mock.patch.object(install, "_mac_powerpoint_ready", return_value=True):
+            with mock.patch.object(install, "_optional_binary_ready", return_value=True):
+                status = install.page_evidence_status()
+        self.assertTrue(status["pptx"])
+        self.assertEqual(status["pptx_engine"], "Microsoft PowerPoint")
+
 
 if __name__ == "__main__":
     unittest.main()
