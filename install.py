@@ -21,6 +21,7 @@ COMPONENTS = (
     "shared",
 )
 MARKITDOWN_SPEC = "markitdown[docx,pdf,pptx,xlsx]==0.1.6"
+MARKITDOWN_INSTALL_TIMEOUT_SECONDS = 600
 
 
 def default_destination() -> Path:
@@ -75,12 +76,50 @@ def install_converter() -> bool:
         print("未找到 pipx，无法自动安装 MarkItDown。请先安装 pipx 后重试。", file=sys.stderr)
         return False
     command = (pipx, "inject", "--force", "markitdown", MARKITDOWN_SPEC) if converter_version() else (pipx, "install", MARKITDOWN_SPEC)
+    print("正在安装 MarkItDown 文档转换依赖，首次下载可能需要几分钟……")
     try:
-        completed = subprocess.run(command, timeout=180, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        print("MarkItDown 安装未完成。", file=sys.stderr)
+        completed = subprocess.run(
+            command,
+            timeout=MARKITDOWN_INSTALL_TIMEOUT_SECONDS,
+            check=False,
+            capture_output=True,
+            text=True,
+            errors="replace",
+        )
+    except subprocess.TimeoutExpired:
+        print("MarkItDown 下载超过 10 分钟，已停止。请检查网络后重新执行安装。", file=sys.stderr)
         return False
-    return completed.returncode == 0 and converter_version() is not None
+    except OSError as exc:
+        print(f"无法启动 MarkItDown 安装命令：{exc}", file=sys.stderr)
+        return False
+    if completed.returncode != 0:
+        print(f"MarkItDown 安装失败（退出码 {completed.returncode}）。", file=sys.stderr)
+        _print_command_output(completed)
+        print("请检查网络、pipx 和安全软件拦截记录后重试。", file=sys.stderr)
+        return False
+    version = converter_version()
+    if not version:
+        print("MarkItDown 安装命令已结束，但转换器仍不可用。请重新打开终端后运行 --doctor。", file=sys.stderr)
+        return False
+    return True
+
+
+def _print_command_output(completed: subprocess.CompletedProcess[str]) -> None:
+    lines = [line for line in (completed.stderr + "\n" + completed.stdout).splitlines() if line.strip()]
+    if not lines:
+        print("安装工具没有返回可读错误。", file=sys.stderr)
+        return
+    print("安装工具返回：", file=sys.stderr)
+    for line in lines[-20:]:
+        print(f"  {line}", file=sys.stderr)
+
+
+def rollback_fresh_install(destination: Path) -> None:
+    """回滚本次刚复制的 ZSK 组件；只在 install() 已完整成功后调用。"""
+    for name in reversed(COMPONENTS):
+        target = destination / name
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
 
 
 def page_evidence_status() -> dict[str, bool]:
@@ -139,10 +178,14 @@ def install(source_root: Path, destination: Path) -> int:
         print(f"安装后检查失败，缺少：{', '.join(missing)}", file=sys.stderr)
         return 5
 
+    return 0
+
+
+def print_install_success(destination: Path) -> None:
+    present, _ = installed_state(destination)
     print(f"安装完成：{destination}")
     print("已安装：" + "、".join(present))
     print("请重新打开一个 Codex / WorkBuddy 任务，再检查 zsk-router。")
-    return 0
 
 
 def main() -> int:
@@ -172,10 +215,16 @@ def main() -> int:
 
     source_root = Path(__file__).resolve().parent / "skills"
     result = install(source_root, destination)
-    if result != 0 or not args.install_markitdown:
+    if result != 0:
         return result
+    if not args.install_markitdown:
+        print_install_success(destination)
+        return 0
     if not install_converter():
+        rollback_fresh_install(destination)
+        print("MarkItDown 未就绪，本次新增的 ZSK 组件已回滚；没有留下半安装状态。", file=sys.stderr)
         return 6
+    print_install_success(destination)
     print("MarkItDown 已就绪：" + (converter_version() or "未知版本"))
     return 0
 
