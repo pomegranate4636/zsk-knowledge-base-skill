@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import json
 import re
 from typing import Any
 
@@ -103,5 +104,8 @@ class Stage7Method:
     def _asset(request: MethodRequest) -> AssetPayload:
         fields = (request.source.source_id, request.title.strip(), request.topic.strip(), request.opening_mechanism.strip(), request.progression_mechanism.strip(), request.expression_mechanism.strip(), request.closing_mechanism.strip(), request.transferable_method.strip())
         asset_id = "MET-" + hashlib.sha256("\n".join(fields).encode("utf-8")).hexdigest()[:16]
-        body = f"---\nsource_id: \"{request.source.source_id}\"\n---\n\n# {request.title.strip()}\n\n## 主题\n\n{request.topic.strip()}\n\n## 开头机制\n\n{request.opening_mechanism.strip()}\n\n## 中间推进\n\n{request.progression_mechanism.strip()}\n\n## 表达机制\n\n{request.expression_mechanism.strip()}\n\n## 结尾行动\n\n{request.closing_mechanism.strip()}\n\n## 可迁移方法\n\n{request.transferable_method.strip()}\n\n## 不可照搬\n\n- 身份、案例、数据、承诺和长段原文不进入方法卡。\n\n## 来源\n\n- {request.source.source_title}\n"
+        topic = json.dumps(request.topic.strip(), ensure_ascii=False)
+        use_when = json.dumps(request.transferable_method.strip(), ensure_ascii=False)
+        source_id = json.dumps(request.source.source_id, ensure_ascii=False)
+        body = f"---\nasset_id: {asset_id}\ntype: oral_method_asset\nstatus: active\naudience_scope: both\nkeywords:\n  - {topic}\nuse_when:\n  - {use_when}\nsource_id: {source_id}\n---\n\n# {request.title.strip()}\n\n## 主题\n\n{request.topic.strip()}\n\n## 开头机制\n\n{request.opening_mechanism.strip()}\n\n## 中间推进\n\n{request.progression_mechanism.strip()}\n\n## 表达机制\n\n{request.expression_mechanism.strip()}\n\n## 结尾行动\n\n{request.closing_mechanism.strip()}\n\n## 可迁移方法\n\n{request.transferable_method.strip()}\n\n## 不可照搬\n\n- 身份、案例、数据、承诺和长段原文不进入方法卡。\n\n## 来源\n\n- {request.source.source_title}\n"
         return AssetPayload(asset_id, request.title.strip(), body, request.source.source_id, "reference_method", {"topic": request.topic.strip(), "asset_root": "04"})

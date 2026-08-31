@@ -6,16 +6,48 @@
 
 这是 **ZSK 的唯一更新真源**。所有 ZSK 功能、安装说明和测试先在这里修改、验证并合并到 `main`。
 
-后续只能从这里单向同步到：
+ZSK 与下游仓库保持独立。ZSK 的代码只能从这里单向进入客户交付包和本机安装副本：
 
 ```text
 zsk-knowledge-base-skill（唯一真源）
 → zhihui-mianmian-skills（客户交付包）
-→ content-slim（知识库消费桥接）
 → 客户或讲师本机 ~/.codex/skills（运行安装副本）
 ```
 
-不要在交付包、Content Slim 或已安装副本中反向修改 ZSK；它们不是更新真源。历史 `content-workflow-skills` 只保留开发与验收记录，不再作为 ZSK 的日常开发入口。
+Content Slim 是独立的知识库消费仓库，只通过 03/04/05 文件合同衔接，不复制或更新 ZSK 代码。不要在交付包、Content Slim 或已安装副本中反向修改 ZSK；它们不是更新真源。历史 `content-workflow-skills` 只保留开发与验收记录，不再作为 ZSK 的日常开发入口。
+
+面向 Content Slim 时，ZSK 的 04 方法卡必须带可选择元数据，05 主 Profile 必须带唯一 active primary 标记。仓库回归测试会锁定这两个跨仓合同，避免两个仓库各自测试通过、组合后却不可用。
+
+## 与 Content Slim 配合
+
+两套仓库保持独立，推荐顺序是：
+
+```text
+先安装 ZSK
+→ 创建并确认一个 Obsidian 本地知识库
+→ 首次确认一次 Content Slim 资料库连接
+→ 再安装 Content Slim
+→ Codex 第一次口播任务自动读取已有唯一客户配置
+```
+
+连接逻辑由 ZSK 负责：它会把 03、04、05、07 映射为 Content Slim 的通用资料目录，在 06 中 create-only 生成 `content-client-manifest.json`，并安全登记当前宿主的 `client-registry.json`。第一次只做零写入预检；用户确认完整路径和讲述者模式后才写入，之后重复调用只复用。Codex 可以使用标准持久位置；WorkBuddy 或其他宿主必须先定位自己的真实 Registry 与 Runs 位置，不能照抄 Codex 路径。
+
+如果 Registry 已有多个客户，ZSK 只合并当前客户并保留原记录；Content Slim 启动时会要求用户选择，不会猜。相同客户指向不同目录、同一目录出现不同客户标识、软链接或回读失败都会停止。
+
+该连接当前只支持 Obsidian。本地文件没有可靠同步前，飞书知识库不能宣称已经被 Content Slim 直接读取。
+
+用户可以在 ZSK 建库完成后说：
+
+> 请使用 zsk-router，把刚创建的 Obsidian 知识库设为 Content Slim 的默认内容资料库。先做零写入预检，给我看完整路径和讲述者模式，等我确认后再连接。
+
+维护者可在两个仓库位于本机时运行全新隔离验收：
+
+```bash
+python3 tools/verify_content_slim_handoff.py \
+  --content-slim-root /本机/content-slim
+```
+
+该验收会使用全新 Skills 目录、全新 Obsidian 知识库和全新 Run，不读取真实客户资料，也不会生成最终成稿。
 
 ## 一句话理解
 

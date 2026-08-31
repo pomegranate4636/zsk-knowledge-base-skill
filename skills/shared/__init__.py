@@ -15,6 +15,12 @@ from .contracts import (
     RouteDecision,
     SourceRecord,
 )
+from .content_slim_handoff import (
+    ContentSlimHandoffError,
+    ContentSlimHandoffPlan,
+    configure_content_slim_handoff,
+    plan_content_slim_handoff,
+)
 from .evidence import EvidenceRecorder, RunEvidence
 from .fake_adapter import FakeAdapter, FakeFaults
 
@@ -26,6 +32,8 @@ __all__ = [
     "BackendObjectRef",
     "Binding",
     "BindingRegistry",
+    "ContentSlimHandoffError",
+    "ContentSlimHandoffPlan",
     "ExceptionRecord",
     "EvidenceRecorder",
     "FakeAdapter",
@@ -36,4 +44,6 @@ __all__ = [
     "PrivacyDecision",
     "RunEvidence",
     "SourceRecord",
+    "configure_content_slim_handoff",
+    "plan_content_slim_handoff",
 ]

@@ -66,7 +66,7 @@ class ProfilePrimary:
             return f"## {title}\n\n" + "\n".join(f"- {value.strip()}" for value in values)
 
         return "\n\n".join((
-            f"---\nsource_id: \"{self.source_id}\"\n---\n\n# {self.subject_name} Profile",
+            f"---\nstatus: active\nis_primary: true\nprofile_id: {self.profile_id}\nprofile_schema: {PROFILE_SCHEMA}\nsource_id: \"{self.source_id}\"\n---\n\n# {self.subject_name} Profile",
             section("确认事实", self.layers.confirmed_facts),
             section("运营设定", self.layers.operating_settings),
             section("候选素材（待确认）", self.layers.candidate_materials),

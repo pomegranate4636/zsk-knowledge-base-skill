@@ -14,6 +14,17 @@ _WIKI_TOKEN = re.compile(r"^[A-Za-z0-9_-]+$")
 _SPACE_ID = re.compile(r"^[0-9]+$")
 _MIN_CLI_VERSION = (1, 0, 89)
 _REQUIRED_SCOPES = frozenset({"wiki:node:create", "wiki:node:read", "wiki:node:retrieve", "wiki:space:read", "docx:document:create", "docx:document:readonly", "docx:document:write_only"})
+
+
+def _visible_asset_body(body: str) -> bytes:
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    if normalized.startswith("---\n"):
+        closing = normalized.find("\n---\n", 4)
+        if closing >= 0:
+            normalized = normalized[closing + 5 :]
+    return normalized.lstrip("\n").encode("utf-8")
+
+
 @dataclass(frozen=True)
 class _Target:
     space_id: str
@@ -150,21 +161,22 @@ class FeishuAdapter:
             return self._later_stage("write_knowledge_asset")
         storage, failure = self._stage5_storage(binding)
         source = failure or storage.registered_source(asset.source_id, "business_knowledge")
-        body = asset.body.partition("\n\n")[2].encode("utf-8")
+        body = _visible_asset_body(asset.body)
         return source if source.status not in {"ok", "reused"} else self._remember_asset(storage.store_document(f"knowledge:{asset.asset_id}", asset.title, storage.root_nodes["03"], body, "knowledge_asset", "feishu://03"))
     def write_method_asset(self, binding: Binding, asset: AssetPayload) -> AdapterResult:
         if not isinstance(asset, AssetPayload):
             return self._later_stage("write_method_asset")
         storage, failure = self._stage5_storage(binding)
         source = failure or storage.registered_source(asset.source_id, "reference_method")
-        body = asset.body.partition("\n\n")[2].encode("utf-8")
+        body = _visible_asset_body(asset.body)
         return source if source.status not in {"ok", "reused"} else self._remember_asset(storage.store_document(f"method:{asset.asset_id}", asset.title, storage.root_nodes["04"], body, "method_asset", "feishu://04"))
     def write_profile(self, binding: Binding, asset: AssetPayload) -> AdapterResult:
         if not isinstance(asset, AssetPayload):
             return self._later_stage("write_profile")
         storage, failure = self._stage5_storage(binding)
         source = failure or storage.registered_source(asset.source_id, "profile_material")
-        return source if source.status not in {"ok", "reused"} else self._remember_asset(storage.store_document(f"profile:{asset.asset_id}", asset.title, storage.root_nodes["05"], asset.body.encode("utf-8"), "profile", "feishu://05"))
+        body = _visible_asset_body(asset.body)
+        return source if source.status not in {"ok", "reused"} else self._remember_asset(storage.store_document(f"profile:{asset.asset_id}", asset.title, storage.root_nodes["05"], body, "profile", "feishu://05"))
 
     def read_back(self, binding: Binding, refs: Sequence[BackendObjectRef] | None = None) -> AdapterResult:
         guard = self._binding_guard(binding)
