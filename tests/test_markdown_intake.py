@@ -11,8 +11,10 @@ sys.path.insert(0, str(ROOT / "skills"))
 
 from shared.contracts import BINDING_SCHEMA, ROOT_KEYS, Binding  # noqa: E402
 from shared.fake_adapter import FakeAdapter  # noqa: E402
-from shared.markdown_converter import MarkdownConversion, normalize_pptx_slide_markers  # noqa: E402
+from shared.markdown_converter import MarkdownConversion, normalize_pptx_slide_markers, remove_unpersisted_local_images  # noqa: E402
 from shared.stage5_intake import IntakeRequest, Stage5Intake  # noqa: E402
+from shared.stage6_knowledge import KnowledgeRequest, Stage6Knowledge  # noqa: E402
+from shared.stage7_method import MethodRequest, Stage7Method  # noqa: E402
 from shared.templates import TEMPLATE_VERSION  # noqa: E402
 
 
@@ -62,6 +64,28 @@ class MarkdownIntakeTests(unittest.TestCase):
     def test_pptx_slide_comments_become_visible_page_headings(self) -> None:
         text = "<!-- Slide number: 1 -->\n\n项目定位\n\n<!-- Slide number: 2 -->"
         self.assertEqual(normalize_pptx_slide_markers(text), "## 第 1 页\n\n项目定位\n\n## 第 2 页")
+
+    def test_missing_local_image_placeholder_becomes_honest_note(self) -> None:
+        converted = remove_unpersisted_local_images("正文\n\n![](图片1.jpg)\n")
+        self.assertNotIn("图片1.jpg", converted)
+        self.assertIn("原文图片未在轻量文字模式中保存", converted)
+
+    def test_one_neutral_source_can_feed_03_and_04_without_folder_question(self) -> None:
+        response = self.intake.execute(
+            IntakeRequest(TASK_ID, self.binding, "方案.md", "# 客户服务\n\n先说明边界，再给步骤。\n".encode(), "客户服务方案")
+        )
+        self.assertEqual(response.record.source_role, "unknown")
+        knowledge = Stage6Knowledge(self.adapter).execute(
+            KnowledgeRequest(TASK_ID, self.binding, response.record, "服务边界", "客户服务", "服务前先确认适用范围。")
+        )
+        method = Stage7Method(self.adapter).execute(
+            MethodRequest(
+                TASK_ID, self.binding, response.record, "步骤式表达", "内容表达",
+                "先说结论", "再拆步骤", "每段只讲一个动作", "最后给下一步", "结论后接可执行步骤",
+            )
+        )
+        self.assertEqual((knowledge.status, knowledge.asset.source_role), ("registered", "business_knowledge"))
+        self.assertEqual((method.status, method.asset.source_role), ("registered", "reference_method"))
 
 
 if __name__ == "__main__":

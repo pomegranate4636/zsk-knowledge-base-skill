@@ -13,6 +13,7 @@ import tempfile
 
 MARKITDOWN_SUFFIXES = frozenset({".docx", ".pptx", ".xlsx", ".pdf", ".html", ".htm", ".json"})
 _PPTX_SLIDE_COMMENT = re.compile(r"(?m)^<!--[ \t]*Slide number:[ \t]*(\d+)[ \t]*-->[ \t]*$")
+_MARKDOWN_IMAGE = re.compile(r"!\[([^\]]*)\]\(([^)\n]+)\)")
 
 
 class ConverterUnavailable(Exception):
@@ -61,6 +62,7 @@ def convert_to_markdown(payload: bytes, suffix: str) -> MarkdownConversion:
     text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if suffix == ".pptx":
         text = normalize_pptx_slide_markers(text)
+    text = remove_unpersisted_local_images(text)
     if not text or "\x00" in text:
         raise ConversionFailed("MarkItDown produced no safe readable text")
     return MarkdownConversion(text + "\n", "markitdown", version)
@@ -69,6 +71,21 @@ def convert_to_markdown(payload: bytes, suffix: str) -> MarkdownConversion:
 def normalize_pptx_slide_markers(text: str) -> str:
     """把 MarkItDown 的隐藏页码注释转换成可见、可引用的页标题。"""
     return _PPTX_SLIDE_COMMENT.sub(lambda match: f"## 第 {match.group(1)} 页", text)
+
+
+def remove_unpersisted_local_images(text: str) -> str:
+    """移除 MarkItDown 未实际落地的本地图片链接，避免知识库显示破图。"""
+    def replace(match: re.Match[str]) -> str:
+        target = match.group(2).strip().strip("<>")
+        if re.match(r"^(?:https?://|data:)", target, flags=re.IGNORECASE):
+            return match.group(0)
+        alt = match.group(1).strip()
+        suffix = f"（{alt}）" if alt else ""
+        return f"> [!note] 原文图片未在轻量文字模式中保存{suffix}。"
+
+    cleaned = _MARKDOWN_IMAGE.sub(replace, text)
+    note = r"(> \[!note\] 原文图片未在轻量文字模式中保存(?:（[^\n]*）)?。)(?:\s*\1)+"
+    return re.sub(note, r"\1", cleaned)
 
 
 def markitdown_status() -> MarkdownConversion | None:

@@ -66,7 +66,7 @@ class Stage6Knowledge:
 
     @staticmethod
     def _source_code(source: SourceRecord) -> str | None:
-        if source.source_role != "business_knowledge":
+        if source.source_role not in {"business_knowledge", "mixed", "unknown"}:
             return "routing_ambiguous"
         if source.status not in {"registered", "reused"}:
             return "ownership_unknown"
@@ -82,5 +82,5 @@ class Stage6Knowledge:
         asset_id = "KNO-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
         applicability = request.applicability.strip() or "仅在来源所述场景中使用。"
         cautions = request.cautions.strip() or "不得补充来源未说明的事实或承诺。"
-        body = f"# {request.title.strip()}\n\n## 主题\n\n{request.topic.strip()}\n\n## 核心知识\n\n{request.facts.strip()}\n\n## 适用范围\n\n{applicability}\n\n## 使用边界\n\n{cautions}\n\n## 来源\n\n- `{request.source.source_id}`\n"
-        return AssetPayload(asset_id, request.title.strip(), body, request.source.source_id, request.source.source_role, {"topic": request.topic.strip()})
+        body = f"---\nsource_id: \"{request.source.source_id}\"\n---\n\n# {request.title.strip()}\n\n## 主题\n\n{request.topic.strip()}\n\n## 核心知识\n\n{request.facts.strip()}\n\n## 适用范围\n\n{applicability}\n\n## 使用边界\n\n{cautions}\n\n## 来源\n\n- {request.source.source_title}\n"
+        return AssetPayload(asset_id, request.title.strip(), body, request.source.source_id, "business_knowledge", {"topic": request.topic.strip()})

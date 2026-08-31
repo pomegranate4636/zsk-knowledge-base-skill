@@ -8,6 +8,7 @@ import re
 import stat
 
 from .contracts import AdapterResult, AssetPayload, BackendObjectRef
+from .naming import find_obsidian_source_dir
 
 
 _UNSAFE = re.compile(r"[\\/\x00-\x1f:]")
@@ -25,22 +26,25 @@ class ObsidianStage6Storage:
         self.group_by_topic = group_by_topic
 
     def write(self, asset: AssetPayload) -> AdapterResult:
-        source = self.root / "01-来源索引" / asset.source_id
-        if not source.is_dir() or source.is_symlink():
+        source = find_obsidian_source_dir(self.root, asset.source_id)
+        if source is None:
             return AdapterResult.failed("ownership_unknown", "Asset source is not fully registered in 01.", blocked=True)
         try:
-            originals = tuple(path for path in source.iterdir() if path.name in _ORIGINAL_NAMES)
-            readable = source / "readable.md"
+            originals = tuple(path for path in source.iterdir() if path.name in _ORIGINAL_NAMES or path.name.endswith("-原件" + path.suffix))
+            readable_candidates = tuple(path for path in source.iterdir() if path.name == "readable.md" or path.name.endswith("-可读版.md"))
             if not originals:
                 return AdapterResult.failed("ownership_unknown", "Asset source is not fully registered in 01.", blocked=True)
             if len(originals) != 1:
                 return AdapterResult.failed("duplicate_conflict", "Asset source has more than one registered original.", blocked=True)
+            if len(readable_candidates) != 1:
+                return AdapterResult.failed("ownership_unknown", "Asset source has no unique readable copy.", blocked=True)
             original = originals[0]
+            readable = readable_candidates[0]
             if any(not path.is_file() or path.is_symlink() for path in (original, readable)):
                 return AdapterResult.failed("ownership_unknown", "Asset source is not fully registered in 01.", blocked=True)
             content = readable.read_text(encoding="utf-8")
-            if asset.source_id not in content or f'source_role: "{self.source_role}"' not in content:
-                return AdapterResult.failed("routing_ambiguous", "Registered source role does not match this asset destination.", blocked=True)
+            if asset.source_id not in content:
+                return AdapterResult.failed("ownership_unknown", "Registered source identity cannot be verified.", blocked=True)
         except OSError:
             return AdapterResult.failed("readback_failed", "Knowledge card source cannot be read safely.", blocked=True)
         title = self._part(asset.title)
@@ -54,7 +58,7 @@ class ObsidianStage6Storage:
                     return AdapterResult.failed("structure_conflict", "Knowledge topic path is not a normal directory.", blocked=True)
             else:
                 os.mkdir(directory, 0o700)
-            path = directory / f"{title}--{asset.asset_id[-8:]}.md"
+            path = directory / f"{title}.md"
             payload = asset.body.encode("utf-8")
             if path.exists() or path.is_symlink():
                 mode = os.lstat(path).st_mode

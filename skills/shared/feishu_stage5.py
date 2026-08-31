@@ -5,6 +5,7 @@ import json
 from typing import Any, Mapping, Sequence
 from .contracts import AdapterResult, BackendObjectRef, ExceptionRecord, PageArtifact, SourceRecord
 from .feishu_cli import CliResponse, CliRunner
+from .naming import page_file_name, safe_title, source_original_name
 class FeishuStage5Storage:
     def __init__(self, runner: CliRunner, space_id: str, root_nodes: Mapping[str, str]) -> None:
         self.runner = runner
@@ -18,18 +19,37 @@ class FeishuStage5Storage:
         replay = self._replay(key, payload)
         if replay:
             return replay
-        node, failure = self._find(self.root_nodes["01"], f"{source.source_id}.bin", "file")
+        registered, registered_failure = self._find_source_document(source.source_id)
+        if registered_failure:
+            return registered_failure
+        if registered is not None:
+            _readable_node, content = registered
+            recorded_hash = self._frontmatter_value(content, "original_sha256")
+            if recorded_hash != source.original_sha256:
+                return AdapterResult.failed("version_conflict", "Registered source hash differs from this original.", blocked=True)
+            display_name = self._frontmatter_value(content, "display_name")
+            original_name = self._frontmatter_value(content, "original_file_name")
+            if not isinstance(display_name, str) or not isinstance(original_name, str):
+                return AdapterResult.failed("readback_failed", "Registered source naming metadata is incomplete.", blocked=True)
+            original, original_failure = self._find(
+                self.root_nodes["01"], source_original_name(display_name, original_name), "file"
+            )
+            if original_failure or not original:
+                return original_failure or AdapterResult.failed("ownership_unknown", "Registered source original is missing.", blocked=True)
+            ref = self._ref(key, "source_original", payload, "feishu://01/original")
+            self._stored[key] = (source.original_sha256, ref)
+            return AdapterResult.reused(ref, checked=("source_identity_verified", "payload_sha256", "human_readable_name"))
+        name = source_original_name(source.display_name or source.source_title, source.original_name)
+        node, failure = self._find(self.root_nodes["01"], name, "file")
         if failure:
             return failure
         if node:
-            ref = self._ref(key, "source_original", payload, "feishu://01/original")
-            self._stored[key] = (source.original_sha256, ref)
-            return AdapterResult.reused(ref, checked=("remote_file_present", "content_addressed_name", "stable_file_token"))
+            return AdapterResult.failed("version_conflict", "A different source already uses this human-readable file name.", blocked=True)
         argv = (
             "lark-cli", "--as", "user", "drive", "+upload", "--file", "{file}",
-            "--wiki-token", self.root_nodes["01"], "--name", f"{source.source_id}.bin", "--format", "json",
+            "--wiki-token", self.root_nodes["01"], "--name", name, "--format", "json",
         )
-        data, failure = self._response(self.runner.upload(argv, payload=payload, name=f"{source.source_id}.bin"), "write_failed")
+        data, failure = self._response(self.runner.upload(argv, payload=payload, name=name), "write_failed")
         if failure:
             return failure
         token = data.get("file_token") or data.get("token")
@@ -37,11 +57,12 @@ class FeishuStage5Storage:
             return AdapterResult.failed("readback_failed", "Uploaded File has no stable token.", blocked=True)
         ref = self._ref(key, "source_original", payload, "feishu://01/original")
         self._stored[key] = (hashlib.sha256(payload).hexdigest(), ref)
-        return AdapterResult.ok(ref, checked=("drive_file_uploaded", "content_addressed_name", "stable_file_token"))
+        return AdapterResult.ok(ref, checked=("drive_file_uploaded", "human_readable_name", "stable_file_token"))
     def store_readable(self, source: SourceRecord, payload: bytes) -> AdapterResult:
         if hashlib.sha256(payload).hexdigest() != source.readable_sha256:
             return AdapterResult.failed("source_unreadable", "Readable payload hash does not match its record.", blocked=True)
-        return self._store_doc(f"{source.source_id}:readable", source.source_id, self.root_nodes["01"], payload, "source_readable", "feishu://01/readable")
+        title = safe_title(source.display_name or source.source_title)
+        return self._store_doc(f"{source.source_id}:readable", title, self.root_nodes["01"], payload, "source_readable", "feishu://01/readable")
     def store_page_evidence(self, source: SourceRecord, page: PageArtifact, payload: bytes) -> AdapterResult:
         if page.source_id != source.source_id or page not in source.page_artifacts:
             return AdapterResult.failed("binding_conflict", "Page evidence does not belong to the source.", blocked=True)
@@ -51,14 +72,14 @@ class FeishuStage5Storage:
         replay = self._replay(key, payload)
         if replay:
             return replay
-        name = f"{source.source_id}-page-{page.page_number:03d}-{page.sha256[:16]}.png"
+        name = f"{safe_title(source.display_name or source.source_title)}-{page_file_name(page.page_number)}"
         node, failure = self._find(self.root_nodes["01"], name, "file")
         if failure:
             return failure
         if node:
             ref = self._ref(key, "source_page", payload, f"feishu://01/pages/{page.page_number:03d}")
             self._stored[key] = (page.sha256, ref)
-            return AdapterResult.reused(ref, checked=("remote_page_present", "content_addressed_name", "stable_file_token"))
+            return AdapterResult.reused(ref, checked=("remote_page_present", "human_readable_name", "stable_file_token"))
         argv = (
             "lark-cli", "--as", "user", "drive", "+upload", "--file", "{file}",
             "--wiki-token", self.root_nodes["01"], "--name", name, "--format", "json",
@@ -71,10 +92,10 @@ class FeishuStage5Storage:
             return AdapterResult.failed("readback_failed", "Uploaded page has no stable token.", blocked=True)
         listed, list_failure = self._find(self.root_nodes["01"], name, "file")
         if list_failure or not listed:
-            return list_failure or AdapterResult.failed("readback_failed", "Uploaded page cannot be read back by its content-addressed name.", blocked=True)
+            return list_failure or AdapterResult.failed("readback_failed", "Uploaded page cannot be read back by its human-readable name.", blocked=True)
         ref = self._ref(key, "source_page", payload, f"feishu://01/pages/{page.page_number:03d}")
         self._stored[key] = (page.sha256, ref)
-        return AdapterResult.ok(ref, checked=("drive_page_uploaded", "content_addressed_name", "stable_file_token", "list_readback"))
+        return AdapterResult.ok(ref, checked=("drive_page_uploaded", "human_readable_name", "stable_file_token", "list_readback"))
     def write_exception(self, exception: ExceptionRecord) -> AdapterResult:
         payload = (f"原因码：`{exception.reason_code}`\n\n{exception.safe_note}\n\n待确认：{exception.question}\n").encode("utf-8")
         return self._store_doc(f"exception:{exception.exception_id}", exception.exception_id, self.root_nodes["02"], payload, "exception", "feishu://02")
@@ -83,6 +104,23 @@ class FeishuStage5Storage:
         return self._store_doc(key, title, parent, payload, kind, locator, wrapped=False)
 
     def registered_source(self, source_id: str, source_role: str) -> AdapterResult:
+        if all(key in self._stored for key in (f"{source_id}:original", f"{source_id}:readable")):
+            return AdapterResult.ok(checked=("source_original_present", "source_readable_present", "source_identity_verified"))
+        found, failure = self._find_source_document(source_id)
+        if failure:
+            return failure
+        if found is not None:
+            _node, content = found
+            display_name = self._frontmatter_value(content, "display_name")
+            original_name = self._frontmatter_value(content, "original_file_name")
+            if not isinstance(display_name, str) or not isinstance(original_name, str):
+                return AdapterResult.failed("readback_failed", "Registered source naming metadata is incomplete.", blocked=True)
+            original, original_failure = self._find(
+                self.root_nodes["01"], source_original_name(display_name, original_name), "file"
+            )
+            if original_failure or not original:
+                return original_failure or AdapterResult.failed("ownership_unknown", "Registered source original is missing.", blocked=True)
+            return AdapterResult.ok(checked=("source_original_present", "source_readable_present", "source_identity_verified", "human_readable_names"))
         original, failure = self._find(self.root_nodes["01"], f"{source_id}.bin", "file")
         readable, readable_failure = self._find(self.root_nodes["01"], source_id, "docx")
         if failure or readable_failure:
@@ -94,9 +132,42 @@ class FeishuStage5Storage:
         content = data.get("document", {}).get("content", "") if isinstance(data.get("document"), dict) else ""
         if failure or source_id not in str(content):
             return failure or AdapterResult.failed("readback_failed", "Registered source readable copy cannot be verified.", blocked=True)
-        if f'source_role: "{source_role}"' not in str(content):
-            return AdapterResult.failed("routing_ambiguous", "Registered source role does not match this asset destination.", blocked=True)
-        return AdapterResult.ok(checked=("source_original_present", "source_readable_present", "source_role_verified"))
+        return AdapterResult.ok(checked=("source_original_present", "source_readable_present", "source_identity_verified"))
+
+    def _find_source_document(self, source_id: str) -> tuple[tuple[dict[str, Any], str] | None, AdapterResult | None]:
+        argv = ("lark-cli", "--as", "user", "wiki", "nodes", "list", "--space-id", self.space_id, "--parent-node-token", self.root_nodes["01"], "--page-all", "--format", "json")
+        data, failure = self._response(self.runner.run(argv), "readback_failed")
+        if failure:
+            return None, failure
+        items = data.get("items") or []
+        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+            return None, AdapterResult.failed("readback_failed", "Wiki child list is malformed.", blocked=True)
+        matches: list[tuple[dict[str, Any], str]] = []
+        marker = f'source_id: "{source_id}"'
+        for item in items:
+            if item.get("obj_type") != "docx" or not isinstance(item.get("obj_token"), str):
+                continue
+            fetch = ("lark-cli", "--as", "user", "docs", "+fetch", "--api-version", "v2", "--doc", item["obj_token"], "--doc-format", "markdown", "--format", "json")
+            fetched, fetch_failure = self._response(self.runner.run(fetch), "readback_failed")
+            if fetch_failure:
+                return None, fetch_failure
+            document = fetched.get("document") if isinstance(fetched.get("document"), dict) else None
+            content = str(document.get("content", "")) if document else ""
+            if marker in content:
+                matches.append((item, content))
+        if len(matches) > 1:
+            return None, AdapterResult.failed("duplicate_conflict", "More than one readable source has the same source identity.", blocked=True)
+        return (matches[0] if matches else None), None
+
+    @staticmethod
+    def _frontmatter_value(content: str, key: str) -> object:
+        for line in content.splitlines():
+            if line.startswith(f"{key}:"):
+                try:
+                    return json.loads(line.partition(":")[2].strip())
+                except json.JSONDecodeError:
+                    return None
+        return None
 
     def registered_business_source(self, source_id: str) -> AdapterResult:
         return self.registered_source(source_id, "business_knowledge")

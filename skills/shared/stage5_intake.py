@@ -15,6 +15,7 @@ from typing import Any
 from .adapter import KnowledgeBaseAdapter
 from .contracts import BINDING_SCHEMA, SOURCE_ROLES, SOURCE_SCHEMA, TASK_ID, BackendObjectRef, Binding, ExceptionRecord, PageArtifact, SourceRecord
 from .markdown_converter import ConversionFailed, ConverterUnavailable, MarkdownConversion, convert_to_markdown
+from .naming import human_source_label, page_file_name
 from .page_renderer import PageRenderFailed, PageRendererUnavailable, RenderedPage, render_page_evidence
 
 
@@ -91,7 +92,6 @@ class Stage5Intake:
     def __init__(self, adapter: KnowledgeBaseAdapter) -> None:
         self.adapter = adapter
         self._names: dict[tuple[str, str], str] = {}
-        self._roles: dict[tuple[str, str], str] = {}
 
     def execute(self, request: IntakeRequest) -> IntakeResponse:
         digest = hashlib.sha256(request.payload).hexdigest()
@@ -124,9 +124,6 @@ class Stage5Intake:
         if request.page_evidence_mode == "required" and not request.original_retention_approved:
             evidence["page_evidence"] = {"mode": "required", "status": "approval_required"}
             return self._exception(request.binding, source_id, "privacy_approval_required", evidence)
-        prior_role = self._roles.get((request.binding.client_id, source_id))
-        if prior_role is not None and prior_role != request.source_role:
-            return self._exception(request.binding, source_id, "duplicate_conflict", evidence)
         name_key = (request.binding.client_id, request.file_name.casefold())
         prior_source = self._names.get(name_key)
         version_of = None
@@ -162,18 +159,22 @@ class Stage5Intake:
                 "page_sha256": [page.artifact.sha256 for page in rendered_pages],
             }
         page_artifacts = tuple(page.artifact for page in rendered_pages)
+        display_name = human_source_label(request.source_title)
+        if page_artifacts:
+            body = self._with_page_evidence(body, page_artifacts, request.binding.backend_type)
         readable = self._document(
             request, source_id, digest, privacy_status, version_of, conversion, body,
-            page_artifacts=page_artifacts, page_engine=page_engine,
+            page_artifacts=page_artifacts, page_engine=page_engine, display_name=display_name,
         )
         record = SourceRecord(
-            SOURCE_SCHEMA, source_id, request.binding.client_id, request.source_title.strip(), request.source_role,
+            SOURCE_SCHEMA, source_id, request.binding.client_id, request.source_title.strip(), "unknown",
             self._content_kind(suffix), request.file_name, digest,
             hashlib.sha256(readable).hexdigest(), privacy_status, request.permission_status, version_of,
             "registered", request.original_retention_approved or not sensitive_count,
             page_evidence_mode=request.page_evidence_mode,
             page_count=len(page_artifacts),
             page_artifacts=page_artifacts,
+            display_name=display_name,
         )
         original = self.adapter.store_original(request.binding, record, request.payload)
         self._event(evidence, "store_original", original.status, original.code)
@@ -201,7 +202,6 @@ class Stage5Intake:
         if readback.status not in {"ok", "reused"}:
             return self._exception(request.binding, source_id, readback.code or "readback_failed", evidence, refs)
         self._names[name_key] = source_id
-        self._roles[(request.binding.client_id, source_id)] = request.source_role
         status = "reused" if all(item == "reused" for item in write_statuses) else "registered"
         evidence.update({"status": status, "code": None, "output_ref_ids": [ref.object_id for ref in refs]})
         return IntakeResponse(status, None, source_id, refs, record, evidence)
@@ -261,13 +261,15 @@ class Stage5Intake:
         *,
         page_artifacts: tuple[PageArtifact, ...] = (),
         page_engine: str | None = None,
+        display_name: str = "",
     ) -> bytes:
         suffix = PurePath(request.file_name).suffix.lower()
         unit_kind, unit_count = Stage5Intake._content_units(suffix, body)
         fields = {
             "source_id": source_id, "source_title": request.source_title.strip(),
+            "display_name": display_name,
             "original_file_name": request.file_name, "source_format": suffix.removeprefix("."),
-            "source_role": request.source_role,
+            "source_role": "unknown",
             "original_sha256": original_sha256, "privacy_status": privacy_status,
             "permission_status": request.permission_status, "original_retention_approved": request.original_retention_approved or privacy_status == "passed",
             "version_of": version_of, "conversion_engine": conversion.engine, "conversion_version": conversion.version,
@@ -279,6 +281,34 @@ class Stage5Intake:
         }
         frontmatter = "\n".join(f"{key}: {json.dumps(value, ensure_ascii=False)}" for key, value in fields.items())
         return f"---\n{frontmatter}\n---\n\n{body}".encode("utf-8")
+
+    @staticmethod
+    def _with_page_evidence(body: str, pages: tuple[PageArtifact, ...], backend_type: str) -> str:
+        """把真实存在的页证据写进可读版；飞书不用无法解析的本地图片链接。"""
+        body = re.sub(
+            r"> \[!note\] 原文图片未在轻量文字模式中保存(?:（[^\n]*）)?。",
+            "> [!note] 原始页视觉已保存，请查看对应的完整页面证据。",
+            body,
+        )
+        if backend_type == "obsidian":
+            links = {page.page_number: f"![[页面证据/{page_file_name(page.page_number)}]]" for page in pages}
+            used: set[int] = set()
+
+            def insert(match: re.Match[str]) -> str:
+                number = int(match.group(1))
+                link = links.get(number)
+                if link is None:
+                    return match.group(0)
+                used.add(number)
+                return f"{match.group(0)}\n\n{link}"
+
+            body = re.sub(r"(?m)^## 第\s*(\d+)\s*页\s*$", insert, body)
+            missing = [links[number] for number in sorted(links) if number not in used]
+            if missing:
+                body = body.rstrip() + "\n\n## 完整页面证据\n\n" + "\n\n".join(missing) + "\n"
+            return body
+        evidence = "\n".join(f"- 第 {page.page_number} 页：附件「{page_file_name(page.page_number)}」" for page in pages)
+        return body.rstrip() + "\n\n## 完整页面证据\n\n" + evidence + "\n"
 
     @staticmethod
     def _content_units(suffix: str, body: str) -> tuple[str | None, int | None]:
@@ -298,7 +328,7 @@ class Stage5Intake:
     def _evidence(request: IntakeRequest, suffix: str, source_id: str) -> dict[str, Any]:
         return {
             "schema_version": "zsk-stage5-intake-evidence-v1", "task_id": request.task_id, "phase_id": "ZSK-P5",
-            "safe_input_summary": f"stage5:{suffix.removeprefix('.') or 'none'}:{request.source_role}", "source_id": source_id,
+            "safe_input_summary": f"stage5:{suffix.removeprefix('.') or 'none'}:neutral", "source_id": source_id,
             "events": [], "privacy": {"sensitive_match_count": 0, "original_retention_approved": request.original_retention_approved},
             "model_call_count": 0, "downstream_asset_call_count": 0,
             "page_evidence": {"mode": request.page_evidence_mode, "status": "not_requested"},

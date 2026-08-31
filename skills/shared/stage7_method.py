@@ -89,7 +89,7 @@ class Stage7Method:
 
     @staticmethod
     def _source_code(source: SourceRecord) -> str | None:
-        if source.source_role != "reference_method":
+        if source.source_role not in {"reference_method", "mixed", "unknown"}:
             return "routing_ambiguous"
         if source.status not in {"registered", "reused"}:
             return "ownership_unknown"
@@ -103,5 +103,5 @@ class Stage7Method:
     def _asset(request: MethodRequest) -> AssetPayload:
         fields = (request.source.source_id, request.title.strip(), request.topic.strip(), request.opening_mechanism.strip(), request.progression_mechanism.strip(), request.expression_mechanism.strip(), request.closing_mechanism.strip(), request.transferable_method.strip())
         asset_id = "MET-" + hashlib.sha256("\n".join(fields).encode("utf-8")).hexdigest()[:16]
-        body = f"# {request.title.strip()}\n\n## 主题\n\n{request.topic.strip()}\n\n## 开头机制\n\n{request.opening_mechanism.strip()}\n\n## 中间推进\n\n{request.progression_mechanism.strip()}\n\n## 表达机制\n\n{request.expression_mechanism.strip()}\n\n## 结尾行动\n\n{request.closing_mechanism.strip()}\n\n## 可迁移方法\n\n{request.transferable_method.strip()}\n\n## 不可照搬\n\n- 身份、案例、数据、承诺和长段原文不进入方法卡。\n\n## 来源\n\n- `{request.source.source_id}`\n"
-        return AssetPayload(asset_id, request.title.strip(), body, request.source.source_id, request.source.source_role, {"topic": request.topic.strip(), "asset_root": "04"})
+        body = f"---\nsource_id: \"{request.source.source_id}\"\n---\n\n# {request.title.strip()}\n\n## 主题\n\n{request.topic.strip()}\n\n## 开头机制\n\n{request.opening_mechanism.strip()}\n\n## 中间推进\n\n{request.progression_mechanism.strip()}\n\n## 表达机制\n\n{request.expression_mechanism.strip()}\n\n## 结尾行动\n\n{request.closing_mechanism.strip()}\n\n## 可迁移方法\n\n{request.transferable_method.strip()}\n\n## 不可照搬\n\n- 身份、案例、数据、承诺和长段原文不进入方法卡。\n\n## 来源\n\n- {request.source.source_title}\n"
+        return AssetPayload(asset_id, request.title.strip(), body, request.source.source_id, "reference_method", {"topic": request.topic.strip(), "asset_root": "04"})

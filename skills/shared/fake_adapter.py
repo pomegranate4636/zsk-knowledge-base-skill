@@ -234,7 +234,6 @@ class FakeAdapter:
             if all(
                 record.get("binding_id") == source.client_id
                 and record.get("client_id") == source.client_id
-                and record.get("source_role") == source.source_role
                 for record in records
             ) and source.privacy_status in {"passed", "redacted"} and source.permission_status == "allowed" and source.status in {"registered", "reused"}:
                 self._registered_sources[(source.client_id, source.source_id)] = source
@@ -262,17 +261,17 @@ class FakeAdapter:
         key = f"source:{source.source_id}:{kind}"
         existing = self._objects.get(key)
         if existing is not None:
-            if existing["payload_sha256"] == digest and existing["client_id"] == source.client_id and existing["source_role"] == source.source_role:
+            if existing["payload_sha256"] == digest and existing["client_id"] == source.client_id:
                 self._refresh_source_registration(source)
-                return AdapterResult.reused(self._ref(key), checked=("source_id", "payload_sha256", "source_role"))
+                return AdapterResult.reused(self._ref(key), checked=("source_id", "payload_sha256", "source_identity"))
             return AdapterResult.failed("version_conflict", "same source_id cannot be overwritten", blocked=True)
         for other_key, other in self._objects.items():
             if not other_key.endswith(f":{kind}") or "payload_sha256" not in other:
                 continue
             if other["payload_sha256"] == digest:
-                if other["client_id"] == source.client_id and other["source_role"] == source.source_role:
-                    return AdapterResult.reused(self._ref(other_key), checked=("same_bytes", "same_client", "same_source_role"))
-                return AdapterResult.failed("duplicate_conflict", "same bytes belong to a different client or source role", blocked=True)
+                if other["client_id"] == source.client_id:
+                    return AdapterResult.reused(self._ref(other_key), checked=("same_bytes", "same_client"))
+                return AdapterResult.failed("duplicate_conflict", "same bytes belong to a different client", blocked=True)
         ref = self._store_object(
             key,
             f"source_{kind}",
@@ -287,7 +286,7 @@ class FakeAdapter:
             },
         )
         self._refresh_source_registration(source)
-        return AdapterResult.ok(ref, checked=("create_only", "source_id", "payload_sha256", "source_role"))
+        return AdapterResult.ok(ref, checked=("create_only", "source_id", "payload_sha256", "source_identity"))
 
     def store_original(self, binding: Binding, source: SourceRecord, payload: bytes) -> AdapterResult:
         return self._store_source("store_original", binding, source, payload, "original")

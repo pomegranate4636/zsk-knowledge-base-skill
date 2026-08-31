@@ -9,6 +9,7 @@ import stat
 from typing import Sequence
 
 from .contracts import AdapterResult, AssetPayload, BackendObjectRef, Binding, ExceptionRecord, PageArtifact, SourceRecord, ROOT_KEYS
+from .naming import find_obsidian_source_dir, page_file_name, source_original_name, source_readable_name, unique_source_dir
 from .obsidian_stage6 import ObsidianStage6Storage
 from .templates import ROOT_TITLES, root_content, root_object_kind, template_fingerprint
 
@@ -54,6 +55,7 @@ class ObsidianAdapter:
         self._root: Path | None = None
         self._source_refs: dict[str, BackendObjectRef] = {}
         self._source_paths: dict[str, Path] = {}
+        self._source_dirs: dict[str, Path] = {}
         self._asset_refs: dict[str, BackendObjectRef] = {}
 
     def doctor(self) -> AdapterResult:
@@ -131,7 +133,10 @@ class ObsidianAdapter:
         if hashlib.sha256(payload).hexdigest() != page.sha256:
             return AdapterResult.failed("source_unreadable", "Page payload hash does not match its manifest.", blocked=True)
         assert self._root is not None
-        page_dir = self._root / _ROOT_NAMES["01"] / source.source_id / "pages"
+        source_dir = self._source_dirs.get(source.source_id) or find_obsidian_source_dir(self._root, source.source_id)
+        if source_dir is None:
+            return AdapterResult.failed("ownership_unknown", "Source directory is unavailable for page evidence.", blocked=True)
+        page_dir = source_dir / "页面证据"
         try:
             if page_dir.exists():
                 mode = os.lstat(page_dir).st_mode
@@ -141,10 +146,10 @@ class ObsidianAdapter:
                 os.mkdir(page_dir, 0o700)
         except OSError:
             return AdapterResult.failed("write_failed", "Page evidence directory cannot be created safely.")
-        name = f"page-{page.page_number:03d}-{page.sha256[:16]}.png"
+        name = page_file_name(page.page_number)
         path = page_dir / name
         result = self._store_bytes(
-            path, payload, page.page_id, "source_page", f"obsidian://01/{source.source_id}/pages"
+            path, payload, page.page_id, "source_page", "obsidian://01/页面证据"
         )
         if result.status in {"ok", "reused"}:
             for ref in result.object_refs:
@@ -291,7 +296,10 @@ class ObsidianAdapter:
         if hashlib.sha256(payload).hexdigest() != expected:
             return AdapterResult.failed("source_unreadable", "Source payload hash does not match its record.", blocked=True)
         assert self._root is not None
-        source_dir = self._root / _ROOT_NAMES["01"] / source.source_id
+        source_root = self._root / _ROOT_NAMES["01"]
+        source_dir = self._source_dirs.get(source.source_id) or find_obsidian_source_dir(self._root, source.source_id)
+        if source_dir is None:
+            source_dir = unique_source_dir(source_root, source.display_name or source.source_title)
         try:
             if source_dir.exists():
                 mode = os.lstat(source_dir).st_mode
@@ -299,16 +307,22 @@ class ObsidianAdapter:
                     return AdapterResult.failed("structure_conflict", "Source directory type is invalid.", blocked=True)
             else:
                 os.mkdir(source_dir, 0o700)
+            self._source_dirs[source.source_id] = source_dir
         except OSError:
             return AdapterResult.failed("write_failed", "Source directory cannot be created safely.")
+        legacy_source = source_dir.name == source.source_id
         if kind == "original":
             legacy = source_dir / "original.bin"
             suffix = PurePath(source.original_name).suffix.lower()
-            name = "original.bin" if legacy.exists() or legacy.is_symlink() else f"original{suffix if suffix in _SAFE_ORIGINAL_SUFFIXES else '.bin'}"
+            name = (
+                "original.bin" if legacy.exists() or legacy.is_symlink()
+                else f"original{suffix if suffix in _SAFE_ORIGINAL_SUFFIXES else '.bin'}" if legacy_source
+                else source_original_name(source.display_name or source.source_title, source.original_name)
+            )
         else:
-            name = "readable.md"
+            name = "readable.md" if legacy_source else source_readable_name(source.display_name or source.source_title)
         path = source_dir / name
-        result = self._store_bytes(path, payload, source.source_id, f"source_{kind}", f"obsidian://01/{source.source_id}")
+        result = self._store_bytes(path, payload, source.source_id, f"source_{kind}", f"obsidian://01/{source_dir.name}")
         if result.status in {"ok", "reused"}:
             for ref in result.object_refs:
                 self._source_refs[ref.object_id] = ref

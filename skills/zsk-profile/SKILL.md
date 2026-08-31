@@ -11,7 +11,7 @@ description: 将已登记的 profile_material 整理为 05 的单一主 Profile�
 
 ## 阶段 8 边界
 
-本阶段只接收已登记、处理权明确且隐私状态为 `passed` 或 `redacted` 的 `profile_material` 来源。先将来源主体与当前 Binding 的主体逐字核对，再在 05 写入一份包含三个独立区块的主 Profile 并回读。
+本阶段只接收已登记、处理权明确且隐私状态为 `passed` 或 `redacted` 的来源中，被语义识别为主体资料的内容单元；来源整体可以是 `unknown` 或 `mixed`。先将内容单元中的主体与当前 Binding 的主体逐字核对，再按 06 偏好写入候选区或更新包含三个独立区块的主 Profile 并回读。
 
 重复提交同一主 Profile 只能回读复用；同一 Binding 已有不同的 active primary 时返回 `version_conflict`，不得覆盖、迁移或合并旧 Profile。
 

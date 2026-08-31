@@ -325,6 +325,7 @@ class SourceRecord:
     page_evidence_mode: str = "off"
     page_count: int = 0
     page_artifacts: tuple[PageArtifact, ...] = ()
+    display_name: str = ""
 
     def __post_init__(self) -> None:
         validate_source(self)
@@ -349,6 +350,7 @@ class SourceRecord:
             "page_evidence_mode": self.page_evidence_mode,
             "page_count": self.page_count,
             "page_artifacts": [item.as_dict() for item in self.page_artifacts],
+            "display_name": self.display_name,
         }
 
 
@@ -361,6 +363,8 @@ def validate_source(source: SourceRecord) -> None:
         raise ContractError("source_unreadable", "source client_id is invalid")
     for field_name in ("source_title", "original_name"):
         _non_empty(getattr(source, field_name), field_name)
+    if source.display_name:
+        _non_empty(source.display_name, "display_name")
     if source.source_role not in SOURCE_ROLES:
         raise ContractError("routing_ambiguous", "source_role is not supported")
     if source.content_kind not in CONTENT_KINDS:

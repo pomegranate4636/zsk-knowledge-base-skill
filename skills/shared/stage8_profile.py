@@ -55,6 +55,7 @@ class ProfilePrimary:
     profile_id: str
     subject_name: str
     source_id: str
+    source_title: str
     layers: ProfileLayers
 
     def asset(self, source_role: str) -> AssetPayload:
@@ -65,11 +66,11 @@ class ProfilePrimary:
             return f"## {title}\n\n" + "\n".join(f"- {value.strip()}" for value in values)
 
         return "\n\n".join((
-            f"# {self.subject_name} Profile",
+            f"---\nsource_id: \"{self.source_id}\"\n---\n\n# {self.subject_name} Profile",
             section("确认事实", self.layers.confirmed_facts),
             section("运营设定", self.layers.operating_settings),
             section("候选素材（待确认）", self.layers.candidate_materials),
-            f"## 来源\n\n- `{self.source_id}`",
+            f"## 来源\n\n- {self.source_title}",
         )) + "\n"
 
 
@@ -119,7 +120,7 @@ class Stage8Profile:
             self._record(evidence, "profile_gate", "blocked", code)
             return ProfileResponse("exception", code, None, evidence)
         primary = self._primary(request)
-        fingerprint = primary.asset(request.source.source_role).fingerprint()
+        fingerprint = primary.asset("profile_material").fingerprint()
         binding_key = self._binding_key(request.binding)
         active = self._active.get(binding_key)
         if active is not None:
@@ -133,7 +134,7 @@ class Stage8Profile:
             evidence["status"] = "reused"
             evidence["profile_id"] = active.primary.profile_id
             return ProfileResponse("reused", None, active.primary, evidence)
-        written = self.adapter.write_profile(request.binding, primary.asset(request.source.source_role))
+        written = self.adapter.write_profile(request.binding, primary.asset("profile_material"))
         self._record(evidence, "write_profile", written.status, written.code)
         if written.status not in {"ok", "reused"}:
             code = "version_conflict" if written.code == "duplicate_conflict" else written.code or "write_failed"
@@ -154,7 +155,7 @@ class Stage8Profile:
             return "binding_conflict"
         if request.subject_name.strip() != request.binding.client_name.strip():
             return "profile_identity_mismatch"
-        if request.source.source_role != "profile_material":
+        if request.source.source_role not in {"profile_material", "mixed", "unknown"}:
             return "routing_ambiguous"
         if request.source.status not in {"registered", "reused"}:
             return "ownership_unknown"
@@ -167,7 +168,7 @@ class Stage8Profile:
     @staticmethod
     def _primary(request: ProfileRequest) -> ProfilePrimary:
         profile_id = "PRF-" + hashlib.sha256(request.binding.client_id.encode("utf-8")).hexdigest()[:16]
-        return ProfilePrimary(profile_id, request.subject_name.strip(), request.source.source_id, request.layers)
+        return ProfilePrimary(profile_id, request.subject_name.strip(), request.source.source_id, request.source.source_title, request.layers)
 
     @staticmethod
     def _binding_key(binding: Binding) -> str:

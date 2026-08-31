@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -20,6 +21,7 @@ from shared.obsidian_adapter import ObsidianAdapter  # noqa: E402
 from shared import page_renderer  # noqa: E402
 from shared.page_renderer import PageRenderFailed, PageRendererUnavailable, RenderedPage, RenderedPages  # noqa: E402
 from shared.stage5_intake import IntakeRequest, Stage5Intake  # noqa: E402
+from shared.stage6_knowledge import KnowledgeRequest, Stage6Knowledge  # noqa: E402
 from shared.templates import TEMPLATE_VERSION  # noqa: E402
 
 
@@ -135,13 +137,22 @@ class PageEvidenceIntakeTests(unittest.TestCase):
                 )
             )
             self.assertEqual((response.status, response.code), ("registered", None))
-            page = Path(folder) / "01-来源索引" / response.source_id / "pages" / f"page-001-{hashlib.sha256(PNG).hexdigest()[:16]}.png"
+            source_dir = Path(folder) / "01-来源索引" / response.record.display_name
+            page = source_dir / "页面证据" / "第001页.png"
             self.assertEqual(page.read_bytes(), PNG)
+            readable = source_dir / f"{response.record.display_name}-可读版.md"
+            self.assertIn("![[页面证据/第001页.png]]", readable.read_text(encoding="utf-8"))
             self.assertEqual(adapter.read_back(active_binding, response.refs).status, "ok")
+            fresh_adapter = ObsidianAdapter()
+            fresh_adapter.resolve_binding(active_binding)
+            routed = Stage6Knowledge(fresh_adapter).execute(
+                KnowledgeRequest(TASK_ID, active_binding, response.record, "资料知识", "通用资料", "来源已经完整登记。")
+            )
+            self.assertEqual((routed.status, routed.code), ("registered", None))
 
 
 class PageEvidenceStorageTests(unittest.TestCase):
-    def test_feishu_page_name_is_content_addressed_and_listed_after_upload(self) -> None:
+    def test_feishu_page_name_is_human_readable_and_listed_after_upload(self) -> None:
         source_id = "SRC-" + hashlib.sha256(b"pdf").hexdigest()[:24]
         page = rendered().pages[0].artifact
         source = SourceRecord(
@@ -162,8 +173,9 @@ class PageEvidenceStorageTests(unittest.TestCase):
             page_evidence_mode="required",
             page_count=1,
             page_artifacts=(page,),
+            display_name="2026-08-31 资料",
         )
-        name = f"{source_id}-page-001-{page.sha256[:16]}.png"
+        name = "2026-08-31 资料-第001页.png"
         list_call = ("lark-cli", "--as", "user", "wiki", "nodes", "list", "--space-id", "1", "--parent-node-token", "root-01", "--page-all", "--format", "json")
         upload_call = ("lark-cli", "--as", "user", "drive", "+upload", "--file", "{file}", "--wiki-token", "root-01", "--name", name, "--format", "json")
         runner = RecordedCliRunner((
@@ -174,6 +186,22 @@ class PageEvidenceStorageTests(unittest.TestCase):
         result = FeishuStage5Storage(runner, "1", {"01": "root-01", "02": "root-02"}).store_page_evidence(source, page, PNG)
         self.assertEqual(result.status, "ok")
         self.assertEqual(result.object_refs[0].object_kind, "source_page")
+        self.assertTrue(runner.exhausted)
+
+    def test_feishu_human_named_source_can_be_found_in_a_fresh_run(self) -> None:
+        source_id = "SRC-" + hashlib.sha256(b"pdf").hexdigest()[:24]
+        display_name = "2026-08-31 资料"
+        original_name = f"{display_name}-原件.pdf"
+        readable_content = f'---\nsource_id: "{source_id}"\ndisplay_name: "{display_name}"\noriginal_file_name: "资料.pdf"\n---\n'
+        list_call = ("lark-cli", "--as", "user", "wiki", "nodes", "list", "--space-id", "1", "--parent-node-token", "root-01", "--page-all", "--format", "json")
+        fetch_call = ("lark-cli", "--as", "user", "docs", "+fetch", "--api-version", "v2", "--doc", "readable-token", "--doc-format", "markdown", "--format", "json")
+        runner = RecordedCliRunner((
+            RecordedCliCall(list_call, '{"ok":true,"data":{"items":[{"title":"' + display_name + '","obj_type":"docx","obj_token":"readable-token"},{"title":"' + original_name + '","obj_type":"file","obj_token":"original-token"}]}}'),
+            RecordedCliCall(fetch_call, json.dumps({"ok": True, "data": {"document": {"content": readable_content}}}, ensure_ascii=False)),
+            RecordedCliCall(list_call, '{"ok":true,"data":{"items":[{"title":"' + original_name + '","obj_type":"file","obj_token":"original-token"}]}}'),
+        ))
+        result = FeishuStage5Storage(runner, "1", {"01": "root-01", "02": "root-02"}).registered_source(source_id, "business_knowledge")
+        self.assertEqual(result.status, "ok")
         self.assertTrue(runner.exhausted)
 
 
