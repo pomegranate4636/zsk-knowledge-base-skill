@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 from unittest import mock
 import tempfile
 import unittest
@@ -71,6 +72,16 @@ class InstallDoctorTests(unittest.TestCase):
         self.assertTrue(status["ready"])
         self.assertEqual(status["engine"], "Tesseract")
         self.assertEqual(status["languages"], ("chi_sim", "eng"))
+
+    def test_windows_standard_tesseract_path_works_before_path_refresh(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            executable = Path(folder) / "Tesseract-OCR" / "tesseract.exe"
+            executable.parent.mkdir()
+            executable.write_bytes(b"exe")
+            with mock.patch.dict(os.environ, {"ProgramFiles": folder}, clear=False):
+                with mock.patch.object(install.platform, "system", return_value="Windows"):
+                    with mock.patch.object(install.shutil, "which", return_value=None):
+                        self.assertEqual(install.tesseract_executable(), str(executable))
 
     def test_markitdown_skill_is_a_required_component(self) -> None:
         self.assertIn("markitdown-skill", install.COMPONENTS)
