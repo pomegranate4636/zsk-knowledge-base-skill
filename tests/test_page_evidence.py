@@ -221,6 +221,32 @@ class PageRendererContractTests(unittest.TestCase):
     def test_windows_powerpoint_satisfies_pptx_renderer_status(self, _windows, _mac, _dependency) -> None:
         self.assertEqual(page_renderer.renderer_status(".pptx"), (True, ()))
 
+    @mock.patch(
+        "shared.page_renderer._find_dependency",
+        side_effect=lambda name: "tool" if name in {"pdftoppm", "pdfinfo"} else None,
+    )
+    @mock.patch("shared.page_renderer._find_mac_powerpoint_automation", return_value=None)
+    @mock.patch("shared.page_renderer._find_windows_powerpoint_automation", return_value=None)
+    def test_pptx_status_requires_libreoffice_without_native_powerpoint(
+        self, _windows, _mac, _dependency
+    ) -> None:
+        self.assertEqual(page_renderer.renderer_status(".pptx"), (False, ("soffice/libreoffice",)))
+
+    def test_windows_powerpoint_detection_fails_closed(self) -> None:
+        with mock.patch.object(page_renderer.platform, "system", return_value="Linux"):
+            self.assertIsNone(page_renderer._find_windows_powerpoint_automation())
+        with mock.patch.object(page_renderer.platform, "system", return_value="Windows"):
+            with mock.patch.object(page_renderer.shutil, "which", return_value=None):
+                self.assertIsNone(page_renderer._find_windows_powerpoint_automation())
+        with mock.patch.object(page_renderer.platform, "system", return_value="Windows"):
+            with mock.patch.object(page_renderer.shutil, "which", return_value="powershell.exe"):
+                with mock.patch.object(
+                    page_renderer.subprocess,
+                    "run",
+                    side_effect=subprocess.TimeoutExpired(("powershell.exe",), 15),
+                ):
+                    self.assertIsNone(page_renderer._find_windows_powerpoint_automation())
+
     @mock.patch("shared.page_renderer._find_dependency", side_effect=lambda name: "/usr/bin/tool" if name in {"pdftoppm", "pdfinfo"} else None)
     @mock.patch("shared.page_renderer._find_mac_powerpoint_automation", return_value="/usr/bin/osascript")
     def test_mac_powerpoint_satisfies_pptx_renderer_status(self, _powerpoint, _dependency) -> None:

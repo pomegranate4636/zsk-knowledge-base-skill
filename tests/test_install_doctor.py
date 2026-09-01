@@ -86,6 +86,21 @@ class InstallDoctorTests(unittest.TestCase):
     def test_windows_powerpoint_detection_uses_registered_com(self, _run, _which, _system) -> None:
         self.assertTrue(install._windows_powerpoint_ready())
 
+    def test_windows_powerpoint_detection_fails_closed(self) -> None:
+        with mock.patch.object(install.platform, "system", return_value="Linux"):
+            self.assertFalse(install._windows_powerpoint_ready())
+        with mock.patch.object(install.platform, "system", return_value="Windows"):
+            with mock.patch.object(install.shutil, "which", return_value=None):
+                self.assertFalse(install._windows_powerpoint_ready())
+        with mock.patch.object(install.platform, "system", return_value="Windows"):
+            with mock.patch.object(install.shutil, "which", return_value="powershell.exe"):
+                with mock.patch.object(
+                    install.subprocess,
+                    "run",
+                    side_effect=install.subprocess.TimeoutExpired(("powershell.exe",), 15),
+                ):
+                    self.assertFalse(install._windows_powerpoint_ready())
+
 
 if __name__ == "__main__":
     unittest.main()
