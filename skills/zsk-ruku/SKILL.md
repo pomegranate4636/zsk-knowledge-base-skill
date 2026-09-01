@@ -25,7 +25,7 @@ PDF/PPTX 默认不生成页图。只有 Router 明确传入 `page_evidence_mode=
 - Obsidian 按人类可读来源目录隔离并写入“页面证据/第001页.png”；飞书页附件使用“日期＋标题＋第001页.png”。机器 ID 和哈希只保留在 Manifest。
 - 任一依赖缺失、缺页、重复、错序、写入或回读失败时进入 02，不能报告登记成功。
 
-当前页级证据只保存完整页图，不做 OCR、图片描述、图片检索、自动图文匹配或行业分类。MarkItDown 未实际输出的本地图片占位会被替换为明确说明；完整页模式下再写入真实页证据。PPTX 在 macOS 有 Microsoft PowerPoint 时优先走原生 PowerPoint 导出并记录渲染器；否则使用 LibreOffice。原生渲染器已存在但执行失败时停止，不静默降级。
+当前页级证据只保存完整页图，不做 OCR、图片描述、图片检索、自动图文匹配或行业分类。MarkItDown 未实际输出的本地图片占位会被替换为明确说明；完整页模式下再写入真实页证据。PPTX 在 Windows 或 macOS 检测到 Microsoft PowerPoint 时优先走原生 PowerPoint 导出并记录渲染器；否则使用 LibreOffice。原生渲染器已存在但执行失败时停止，不静默降级。
 
 ## 停止条件
 
