@@ -32,6 +32,46 @@ class InstallDoctorTests(unittest.TestCase):
     def test_shared_requires_the_page_renderer_module(self) -> None:
         self.assertTrue((ROOT / "skills" / "shared" / "page_renderer.py").is_file())
 
+    def test_shared_requires_page_text_and_local_ocr_modules(self) -> None:
+        self.assertTrue((ROOT / "skills" / "shared" / "page_text.py").is_file())
+        self.assertTrue((ROOT / "skills" / "shared" / "ocr_provider.py").is_file())
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder)
+            shared = destination / "shared"
+            shared.mkdir()
+            for name in (
+                "markdown_converter.py",
+                "page_renderer.py",
+                "content_koubo_slim_handoff.py",
+                "configure_content_koubo_slim.py",
+                "naming.py",
+                "page_text.py",
+            ):
+                (shared / name).write_text("", encoding="utf-8")
+            for name in install.COMPONENTS:
+                if name == "shared":
+                    continue
+                component = destination / name
+                component.mkdir()
+                (component / "SKILL.md").write_text("---\nname: test\n---\n", encoding="utf-8")
+            present, missing = install.installed_state(destination)
+            self.assertNotIn("shared", present)
+            self.assertIn("shared", missing)
+
+    @mock.patch.object(install.shutil, "which", return_value="tesseract.exe")
+    @mock.patch.object(
+        install.subprocess,
+        "run",
+        return_value=install.subprocess.CompletedProcess(
+            ("tesseract.exe", "--list-langs"), 0, "List of available languages (2):\nchi_sim\neng\n", ""
+        ),
+    )
+    def test_doctor_reports_local_ocr_languages(self, _run, _which) -> None:
+        status = install.local_ocr_status()
+        self.assertTrue(status["ready"])
+        self.assertEqual(status["engine"], "Tesseract")
+        self.assertEqual(status["languages"], ("chi_sim", "eng"))
+
     def test_markitdown_skill_is_a_required_component(self) -> None:
         self.assertIn("markitdown-skill", install.COMPONENTS)
         self.assertTrue((ROOT / "skills" / "markitdown-skill" / "SKILL.md").is_file())
