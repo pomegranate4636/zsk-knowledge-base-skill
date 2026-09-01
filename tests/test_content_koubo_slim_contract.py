@@ -20,7 +20,7 @@ from shared.templates import TEMPLATE_VERSION  # noqa: E402
 TASK_ID = "01a01e29-a6ba-73a2-82e6-4ad1caa0f33b"
 
 
-class ContentSlimContractTests(unittest.TestCase):
+class ContentKouboSlimContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.binding = Binding(
             BINDING_SCHEMA,
@@ -29,7 +29,7 @@ class ContentSlimContractTests(unittest.TestCase):
             "验收知识库",
             "person",
             "obsidian",
-            "/private/tmp/zsk-content-slim-contract",
+            "/private/tmp/zsk-content-koubo-slim-contract",
             {key: f"root:{key}" for key in ROOT_KEYS},
             TEMPLATE_VERSION,
         )
@@ -52,7 +52,7 @@ class ContentSlimContractTests(unittest.TestCase):
         self.assertIsNotNone(response.record)
         return response.record
 
-    def test_method_card_has_content_slim_selectable_frontmatter(self) -> None:
+    def test_method_card_has_content_koubo_slim_selectable_frontmatter(self) -> None:
         source = self.source("表达方法.md", "reference_method")
         response = Stage7Method(self.adapter).execute(
             MethodRequest(

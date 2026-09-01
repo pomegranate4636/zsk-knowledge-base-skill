@@ -12,11 +12,11 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "skills"))
 
-from shared.content_slim_handoff import (  # noqa: E402
-    ContentSlimHandoffError,
-    configure_content_slim_handoff,
+from shared.content_koubo_slim_handoff import (  # noqa: E402
+    ContentKouboSlimHandoffError,
+    configure_content_koubo_slim_handoff,
 )
-import shared.content_slim_handoff as handoff  # noqa: E402
+import shared.content_koubo_slim_handoff as handoff  # noqa: E402
 from shared.contracts import BINDING_SCHEMA, ROOT_KEYS, Binding  # noqa: E402
 from shared.templates import TEMPLATE_VERSION  # noqa: E402
 
@@ -48,7 +48,7 @@ source_id: "SRC-1234567890abcdef12345678"
 """
 
 
-class ContentSlimHandoffTests(unittest.TestCase):
+class ContentKouboSlimHandoffTests(unittest.TestCase):
     def temporary_root(self):
         parent = Path("/private/tmp") if Path("/private/tmp").is_dir() else None
         return tempfile.TemporaryDirectory(prefix="zsk-content-handoff-", dir=parent)
@@ -91,7 +91,7 @@ class ContentSlimHandoffTests(unittest.TestCase):
 
     @staticmethod
     def targets(root: Path) -> tuple[Path, Path]:
-        config = root / "host" / ".content-v2-slim"
+        config = root / "host" / ".content-koubo-slim"
         return config / "client-registry.json", config / "runs"
 
     def test_preview_is_zero_write_then_confirmation_creates_and_reuses(self) -> None:
@@ -101,7 +101,7 @@ class ContentSlimHandoffTests(unittest.TestCase):
             registry, runs = self.targets(root)
             binding = self.binding(vault)
 
-            preview = configure_content_slim_handoff(
+            preview = configure_content_koubo_slim_handoff(
                 binding=binding,
                 registry_path=registry,
                 runs_root=runs,
@@ -111,10 +111,10 @@ class ContentSlimHandoffTests(unittest.TestCase):
             self.assertIsInstance(preview["confirmation"], str)
             self.assertFalse(registry.exists())
             self.assertFalse(runs.exists())
-            manifest = vault / "06-Agent与Workflow" / "content-client-manifest.json"
+            manifest = vault / "06-Agent与Workflow" / "content-koubo-client-manifest.json"
             self.assertFalse(manifest.exists())
 
-            created = configure_content_slim_handoff(
+            created = configure_content_koubo_slim_handoff(
                 binding=binding,
                 registry_path=registry,
                 runs_root=runs,
@@ -130,7 +130,7 @@ class ContentSlimHandoffTests(unittest.TestCase):
                 binding.client_id,
             )
 
-            reused = configure_content_slim_handoff(
+            reused = configure_content_koubo_slim_handoff(
                 binding=binding,
                 registry_path=registry,
                 runs_root=runs,
@@ -139,6 +139,39 @@ class ContentSlimHandoffTests(unittest.TestCase):
             self.assertEqual(reused["status"], "completed")
             self.assertIsNone(reused["confirmation"])
             self.assertEqual(reused["binding"]["registry_action"], "reuse")
+
+    def test_default_new_binding_preserves_legacy_config_and_runs(self) -> None:
+        with self.temporary_root() as directory:
+            root = Path(directory)
+            host = root / "host"
+            legacy = host / ".content-v2-slim"
+            legacy_runs = legacy / "runs"
+            legacy_runs.mkdir(parents=True)
+            legacy_registry = legacy / "client-registry.json"
+            legacy_registry.write_text('{"legacy": true}\n', encoding="utf-8")
+            legacy_run = legacy_runs / "run.json"
+            legacy_run.write_text('{"state": "saved"}\n', encoding="utf-8")
+            before = (legacy_registry.read_bytes(), legacy_run.read_bytes())
+            vault = self.make_vault(root)
+
+            with mock.patch.dict(os.environ, {"CODEX_HOME": str(host)}):
+                preview = configure_content_koubo_slim_handoff(
+                    binding=self.binding(vault),
+                    speaker_mode="personal_ip",
+                )
+                self.assertEqual(preview["status"], "waiting")
+                configure_content_koubo_slim_handoff(
+                    binding=self.binding(vault),
+                    speaker_mode="personal_ip",
+                    confirmation=preview["confirmation"],
+                )
+
+            current = (legacy_registry.read_bytes(), legacy_run.read_bytes())
+            self.assertEqual(current, before)
+            self.assertTrue(
+                (host / ".content-koubo-slim" / "client-registry.json").is_file()
+            )
+            self.assertTrue((host / ".content-koubo-slim" / "runs").is_dir())
 
     def test_existing_registry_is_merged_without_losing_other_client(self) -> None:
         with self.temporary_root() as directory:
@@ -156,7 +189,7 @@ class ContentSlimHandoffTests(unittest.TestCase):
                 },
             }
             registry.write_text(json.dumps(original), encoding="utf-8")
-            preview = configure_content_slim_handoff(
+            preview = configure_content_koubo_slim_handoff(
                 binding=self.binding(vault),
                 registry_path=registry,
                 runs_root=runs,
@@ -164,7 +197,7 @@ class ContentSlimHandoffTests(unittest.TestCase):
             self.assertEqual(preview["binding"]["registry_action"], "merge")
             self.assertEqual(json.loads(registry.read_text(encoding="utf-8")), original)
 
-            configure_content_slim_handoff(
+            configure_content_koubo_slim_handoff(
                 binding=self.binding(vault),
                 registry_path=registry,
                 runs_root=runs,
@@ -190,8 +223,8 @@ class ContentSlimHandoffTests(unittest.TestCase):
                 },
             }
             registry.write_text(json.dumps(original), encoding="utf-8")
-            with self.assertRaisesRegex(ContentSlimHandoffError, "另一知识库"):
-                configure_content_slim_handoff(
+            with self.assertRaisesRegex(ContentKouboSlimHandoffError, "另一知识库"):
+                configure_content_koubo_slim_handoff(
                     binding=self.binding(vault),
                     registry_path=registry,
                     runs_root=runs,
@@ -218,8 +251,8 @@ class ContentSlimHandoffTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(ContentSlimHandoffError, "必须是字符串"):
-                configure_content_slim_handoff(
+            with self.assertRaisesRegex(ContentKouboSlimHandoffError, "必须是字符串"):
+                configure_content_koubo_slim_handoff(
                     binding=self.binding(vault),
                     registry_path=registry,
                     runs_root=runs,
@@ -230,8 +263,8 @@ class ContentSlimHandoffTests(unittest.TestCase):
             root = Path(directory)
             vault = self.make_vault(root)
             registry, runs = self.targets(root)
-            with self.assertRaisesRegex(ContentSlimHandoffError, "确认信息"):
-                configure_content_slim_handoff(
+            with self.assertRaisesRegex(ContentKouboSlimHandoffError, "确认信息"):
+                configure_content_koubo_slim_handoff(
                     binding=self.binding(vault),
                     registry_path=registry,
                     runs_root=runs,
@@ -240,7 +273,7 @@ class ContentSlimHandoffTests(unittest.TestCase):
             self.assertFalse(registry.exists())
             self.assertFalse(runs.exists())
             self.assertFalse(
-                (vault / "06-Agent与Workflow" / "content-client-manifest.json").exists()
+                (vault / "06-Agent与Workflow" / "content-koubo-client-manifest.json").exists()
             )
 
     def test_registry_change_after_preview_invalidates_confirmation(self) -> None:
@@ -259,7 +292,7 @@ class ContentSlimHandoffTests(unittest.TestCase):
                 },
             }
             registry.write_text(json.dumps(original), encoding="utf-8")
-            preview = configure_content_slim_handoff(
+            preview = configure_content_koubo_slim_handoff(
                 binding=self.binding(vault),
                 registry_path=registry,
                 runs_root=runs,
@@ -270,8 +303,8 @@ class ContentSlimHandoffTests(unittest.TestCase):
                 "manifest_relative_path": "config/manifest.json",
             }
             registry.write_text(json.dumps(changed), encoding="utf-8")
-            with self.assertRaisesRegex(ContentSlimHandoffError, "确认信息"):
-                configure_content_slim_handoff(
+            with self.assertRaisesRegex(ContentKouboSlimHandoffError, "确认信息"):
+                configure_content_koubo_slim_handoff(
                     binding=self.binding(vault),
                     registry_path=registry,
                     runs_root=runs,
@@ -295,7 +328,7 @@ class ContentSlimHandoffTests(unittest.TestCase):
                 },
             }
             registry.write_text(json.dumps(original), encoding="utf-8")
-            preview = configure_content_slim_handoff(
+            preview = configure_content_koubo_slim_handoff(
                 binding=self.binding(vault),
                 registry_path=registry,
                 runs_root=runs,
@@ -307,7 +340,7 @@ class ContentSlimHandoffTests(unittest.TestCase):
                 nonlocal calls
                 calls += 1
                 if calls == 3:
-                    raise ContentSlimHandoffError(
+                    raise ContentKouboSlimHandoffError(
                         "readback_failed", "simulated final readback failure"
                     )
                 return real_read_json(path, label)
@@ -315,8 +348,8 @@ class ContentSlimHandoffTests(unittest.TestCase):
             with mock.patch.object(
                 handoff, "_read_json", side_effect=fail_final_registry_read
             ):
-                with self.assertRaisesRegex(ContentSlimHandoffError, "simulated"):
-                    configure_content_slim_handoff(
+                with self.assertRaisesRegex(ContentKouboSlimHandoffError, "simulated"):
+                    configure_content_koubo_slim_handoff(
                         binding=self.binding(vault),
                         registry_path=registry,
                         runs_root=runs,
@@ -325,7 +358,7 @@ class ContentSlimHandoffTests(unittest.TestCase):
             self.assertEqual(json.loads(registry.read_text(encoding="utf-8")), original)
             self.assertFalse(runs.exists())
             self.assertFalse(
-                (vault / "06-Agent与Workflow" / "content-client-manifest.json").exists()
+                (vault / "06-Agent与Workflow" / "content-koubo-client-manifest.json").exists()
             )
 
     def test_personal_ip_requires_one_primary_profile(self) -> None:
@@ -333,8 +366,8 @@ class ContentSlimHandoffTests(unittest.TestCase):
             root = Path(directory)
             vault = self.make_vault(root, with_profile=False)
             registry, runs = self.targets(root)
-            with self.assertRaisesRegex(ContentSlimHandoffError, "必须且只能"):
-                configure_content_slim_handoff(
+            with self.assertRaisesRegex(ContentKouboSlimHandoffError, "必须且只能"):
+                configure_content_koubo_slim_handoff(
                     binding=self.binding(vault),
                     registry_path=registry,
                     runs_root=runs,
@@ -346,8 +379,8 @@ class ContentSlimHandoffTests(unittest.TestCase):
             root = Path(directory)
             vault = self.make_vault(root)
             registry, runs = self.targets(root)
-            with self.assertRaisesRegex(ContentSlimHandoffError, "Obsidian"):
-                configure_content_slim_handoff(
+            with self.assertRaisesRegex(ContentKouboSlimHandoffError, "Obsidian"):
+                configure_content_koubo_slim_handoff(
                     binding=self.binding(vault, backend="feishu"),
                     registry_path=registry,
                     runs_root=runs,
@@ -362,8 +395,8 @@ class ContentSlimHandoffTests(unittest.TestCase):
             linked = root / "linked-vault"
             os.symlink(vault, linked)
             registry, runs = self.targets(root)
-            with self.assertRaisesRegex(ContentSlimHandoffError, "软链接"):
-                configure_content_slim_handoff(
+            with self.assertRaisesRegex(ContentKouboSlimHandoffError, "软链接"):
+                configure_content_koubo_slim_handoff(
                     binding=self.binding(linked),
                     registry_path=registry,
                     runs_root=runs,

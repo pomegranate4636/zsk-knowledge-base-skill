@@ -14,37 +14,41 @@ zsk-knowledge-base-skill（唯一真源）
 → 客户或讲师本机 ~/.codex/skills（运行安装副本）
 ```
 
-Content Slim 是独立的知识库消费仓库，只通过 03/04/05 文件合同衔接，不复制或更新 ZSK 代码。不要在交付包、Content Slim 或已安装副本中反向修改 ZSK；它们不是更新真源。历史 `content-workflow-skills` 只保留开发与验收记录，不再作为 ZSK 的日常开发入口。
+Content 口播 Slim 是独立的知识库消费仓库，只通过 03/04/05 文件合同衔接，不复制或更新 ZSK 代码。不要在交付包、Content 口播 Slim 或已安装副本中反向修改 ZSK；它们不是更新真源。历史 `content-workflow-skills` 只保留开发与验收记录，不再作为 ZSK 的日常开发入口。
 
-面向 Content Slim 时，ZSK 的 04 方法卡必须带可选择元数据，05 主 Profile 必须带唯一 active primary 标记。仓库回归测试会锁定这两个跨仓合同，避免两个仓库各自测试通过、组合后却不可用。
+面向 Content 口播 Slim 时，ZSK 的 04 方法卡必须带可选择元数据，05 主 Profile 必须带唯一 active primary 标记。仓库回归测试会锁定这两个跨仓合同，避免两个仓库各自测试通过、组合后却不可用。
 
-## 与 Content Slim 配合
+## 与 Content 口播 Slim 配合
 
 两套仓库保持独立，推荐顺序是：
 
 ```text
 先安装 ZSK
 → 创建并确认一个 Obsidian 本地知识库
-→ 首次确认一次 Content Slim 资料库连接
-→ 再安装 Content Slim
+→ 首次确认一次 Content 口播 Slim 资料库连接
+→ 再安装 Content 口播 Slim
 → Codex 第一次口播任务自动读取已有唯一客户配置
 ```
 
-连接逻辑由 ZSK 负责：它会把 03、04、05、07 映射为 Content Slim 的通用资料目录，在 06 中 create-only 生成 `content-client-manifest.json`，并安全登记当前宿主的 `client-registry.json`。第一次只做零写入预检；用户确认完整路径和讲述者模式后才写入，之后重复调用只复用。Codex 可以使用标准持久位置；WorkBuddy 或其他宿主必须先定位自己的真实 Registry 与 Runs 位置，不能照抄 Codex 路径。
+这是推荐交付顺序，不是靠安装先后自动识别。真正决定第一次运行能否自动锁定资料库的，是新版 Registry 已存在、可回读，并且恰好只有一条有效客户记录。
 
-如果 Registry 已有多个客户，ZSK 只合并当前客户并保留原记录；Content Slim 启动时会要求用户选择，不会猜。相同客户指向不同目录、同一目录出现不同客户标识、软链接或回读失败都会停止。
+连接逻辑由 ZSK 负责：它会把 03、04、05、07 映射为 Content 口播 Slim 的通用资料目录，在 06 中 create-only 生成 `content-koubo-client-manifest.json`，并安全登记当前宿主的 `client-registry.json`。第一次只做零写入预检；用户确认完整路径和讲述者模式后才写入，之后重复调用只复用。Codex 可以使用标准持久位置；WorkBuddy 或其他宿主必须先定位自己的真实 Registry 与 Runs 位置，不能照抄 Codex 路径。
 
-该连接当前只支持 Obsidian。本地文件没有可靠同步前，飞书知识库不能宣称已经被 Content Slim 直接读取。
+改名前的 `.content-v2-slim`、旧 Manifest 和旧 Run 不会被读取、覆盖或删除。新版只写 `~/.codex/.content-koubo-slim/` 和新的 `content-koubo-client-manifest.json`；完成真实测试后，再单独处理旧 Skill 的归档。
+
+如果 Registry 已有多个客户，ZSK 只合并当前客户并保留原记录；Content 口播 Slim 启动时会要求用户选择，不会猜。相同客户指向不同目录、同一目录出现不同客户标识、软链接或回读失败都会停止。
+
+该连接当前只支持 Obsidian。本地文件没有可靠同步前，飞书知识库不能宣称已经被 Content 口播 Slim 直接读取。
 
 用户可以在 ZSK 建库完成后说：
 
-> 请使用 zsk-router，把刚创建的 Obsidian 知识库设为 Content Slim 的默认内容资料库。先做零写入预检，给我看完整路径和讲述者模式，等我确认后再连接。
+> 请使用 zsk-router，把刚创建的 Obsidian 知识库设为 Content 口播 Slim 的默认内容资料库。先做零写入预检，给我看完整路径和讲述者模式，等我确认后再连接。
 
 维护者可在两个仓库位于本机时运行全新隔离验收：
 
 ```bash
-python3 tools/verify_content_slim_handoff.py \
-  --content-slim-root /本机/content-slim
+python3 tools/verify_content_koubo_slim_handoff.py \
+  --content-koubo-slim-root /本机/content-koubo-slim
 ```
 
 该验收会使用全新 Skills 目录、全新 Obsidian 知识库和全新 Run，不读取真实客户资料，也不会生成最终成稿。

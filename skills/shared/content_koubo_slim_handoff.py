@@ -1,4 +1,4 @@
-"""Prepare one confirmed Obsidian knowledge-base handoff for Content Slim."""
+"""Prepare one confirmed Obsidian knowledge-base handoff for Content 口播 Slim."""
 
 from __future__ import annotations
 
@@ -24,13 +24,13 @@ CONTENT_ASSET_ROOTS = {
     "output": ROOT_TITLES["07"],
 }
 CONTENT_MANIFEST_RELATIVE_PATH = (
-    f"{ROOT_TITLES['06']}/content-client-manifest.json"
+    f"{ROOT_TITLES['06']}/content-koubo-client-manifest.json"
 )
-CONTENT_OUTPUT_TEMPLATE = "content-slim/{profile_or_brand}/weekly"
+CONTENT_OUTPUT_TEMPLATE = "content-koubo-slim/{profile_or_brand}/weekly"
 MAX_FRONTMATTER_BYTES = 64 * 1024
 
 
-class ContentSlimHandoffError(ValueError):
+class ContentKouboSlimHandoffError(ValueError):
     """Stop before changing a handoff when its identity or paths are unclear."""
 
     def __init__(self, code: str, message: str) -> None:
@@ -40,7 +40,7 @@ class ContentSlimHandoffError(ValueError):
 
 
 @dataclass(frozen=True)
-class ContentSlimHandoffPlan:
+class ContentKouboSlimHandoffPlan:
     client_id: str
     vault_root: Path
     registry_path: Path
@@ -74,7 +74,7 @@ class ContentSlimHandoffPlan:
 def default_content_config_root() -> Path:
     configured = os.environ.get("CODEX_HOME")
     host_root = Path(configured).expanduser() if configured else Path.home() / ".codex"
-    return host_root / ".content-v2-slim"
+    return host_root / ".content-koubo-slim"
 
 
 def default_content_registry_path() -> Path:
@@ -91,7 +91,7 @@ def _lstat(path: Path) -> os.stat_result | None:
     except FileNotFoundError:
         return None
     except OSError as exc:
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "path_unreadable", f"无法检查路径：{path}"
         ) from exc
 
@@ -104,11 +104,11 @@ def _check_existing_chain(path: Path, label: str) -> None:
         if info is None:
             break
         if stat.S_ISLNK(info.st_mode):
-            raise ContentSlimHandoffError(
+            raise ContentKouboSlimHandoffError(
                 "symlink_rejected", f"{label}路径包含软链接：{current}"
             )
         if current != path and not stat.S_ISDIR(info.st_mode):
-            raise ContentSlimHandoffError(
+            raise ContentKouboSlimHandoffError(
                 "path_conflict", f"{label}路径经过非目录对象：{current}"
             )
 
@@ -116,7 +116,7 @@ def _check_existing_chain(path: Path, label: str) -> None:
 def _absolute_path(value: str | Path, label: str) -> Path:
     path = Path(value).expanduser()
     if not path.is_absolute() or ".." in path.parts or path == Path(path.anchor):
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "unsafe_path", f"{label}必须是明确、安全的绝对路径。"
         )
     _check_existing_chain(path, label)
@@ -127,13 +127,13 @@ def _existing_directory(value: str | Path, label: str) -> Path:
     path = _absolute_path(value, label)
     info = _lstat(path)
     if info is None or not stat.S_ISDIR(info.st_mode):
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "directory_missing", f"{label}不存在或不是目录：{path}"
         )
     try:
         return path.resolve(strict=True)
     except OSError as exc:
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "path_unreadable", f"{label}无法回读：{path}"
         ) from exc
 
@@ -141,13 +141,13 @@ def _existing_directory(value: str | Path, label: str) -> Path:
 def _file_target(value: str | Path, label: str) -> Path:
     path = _absolute_path(value, label)
     if path.suffix.casefold() != ".json":
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "unsafe_path", f"{label}必须是 JSON 文件路径。"
         )
     _check_existing_chain(path.parent, label)
     info = _lstat(path)
     if info is not None and not stat.S_ISREG(info.st_mode):
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "path_conflict", f"{label}已被非普通文件占用：{path}"
         )
     return path
@@ -172,7 +172,7 @@ def _safe_relative_json(value: str) -> str:
         or not path.parts
         or path.parts[0] != ROOT_TITLES["06"]
     ):
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "manifest_path_invalid",
             f"Manifest 必须位于 {ROOT_TITLES['06']} 下。",
         )
@@ -192,13 +192,13 @@ def _json_bytes(value: dict[str, Any]) -> bytes:
 def _read_regular_bytes(path: Path, label: str) -> bytes:
     info = _lstat(path)
     if info is None or not stat.S_ISREG(info.st_mode):
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "file_missing", f"{label}不存在或不是普通文件：{path}"
         )
     try:
         return path.read_bytes()
     except OSError as exc:
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "file_unreadable", f"{label}无法读取：{path}"
         ) from exc
 
@@ -208,11 +208,11 @@ def _read_json(path: Path, label: str) -> tuple[dict[str, Any], bytes]:
     try:
         value = json.loads(raw.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError) as exc:
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "file_invalid", f"{label}不是有效 UTF-8 JSON：{path}"
         ) from exc
     if not isinstance(value, dict):
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "file_invalid", f"{label}必须是 JSON 对象：{path}"
         )
     return value, raw
@@ -220,37 +220,37 @@ def _read_json(path: Path, label: str) -> tuple[dict[str, Any], bytes]:
 
 def _validate_registry(value: dict[str, Any]) -> None:
     if set(value) != {"registry_version", "clients"}:
-        raise ContentSlimHandoffError(
-            "registry_invalid", "现有 Registry 字段不符合 Content Slim 合同。"
+        raise ContentKouboSlimHandoffError(
+            "registry_invalid", "现有 Registry 字段不符合 Content 口播 Slim 合同。"
         )
     clients = value.get("clients")
     if value.get("registry_version") != CONTENT_CONTRACT_VERSION or not isinstance(clients, dict) or not clients:
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "registry_invalid", "现有 Registry 版本或客户记录无效。"
         )
     for client_id, record in clients.items():
         if not isinstance(client_id, str) or not CLIENT_ID.fullmatch(client_id):
-            raise ContentSlimHandoffError(
+            raise ContentKouboSlimHandoffError(
                 "registry_invalid", "现有 Registry 包含无效 client_id。"
             )
         if not isinstance(record, dict) or set(record) != {"vault_root", "manifest_relative_path"}:
-            raise ContentSlimHandoffError(
+            raise ContentKouboSlimHandoffError(
                 "registry_invalid", "现有 Registry 客户记录字段无效。"
             )
         vault_value = record["vault_root"]
         manifest_value = record["manifest_relative_path"]
         if not isinstance(vault_value, str) or not isinstance(manifest_value, str):
-            raise ContentSlimHandoffError(
+            raise ContentKouboSlimHandoffError(
                 "registry_invalid", "现有 Registry 路径字段必须是字符串。"
             )
         root = Path(vault_value)
         if not root.is_absolute():
-            raise ContentSlimHandoffError(
+            raise ContentKouboSlimHandoffError(
                 "registry_invalid", "现有 Registry 包含非绝对知识库路径。"
             )
         relative = PurePosixPath(manifest_value)
         if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
-            raise ContentSlimHandoffError(
+            raise ContentKouboSlimHandoffError(
                 "registry_invalid", "现有 Registry 包含不安全 Manifest 路径。"
             )
 
@@ -296,13 +296,13 @@ def _registry_plan(
     clients = current["clients"]
     existing = clients.get(client_id)
     if existing is not None and existing != record:
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "binding_conflict",
             "相同 client_id 已绑定另一知识库，未覆盖。",
         )
     for other_id, other in clients.items():
         if other_id != client_id and other.get("vault_root") == str(vault_root):
-            raise ContentSlimHandoffError(
+            raise ContentKouboSlimHandoffError(
                 "binding_conflict",
                 "同一知识库已经使用另一 client_id 登记，未重复绑定。",
             )
@@ -318,7 +318,7 @@ def _manifest_action(path: Path, expected: dict[str, Any]) -> str:
         return "create"
     current, _ = _read_json(path, "Manifest")
     if current != expected:
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "binding_conflict",
             f"Manifest 已存在但与本次交接不一致，未覆盖：{path}",
         )
@@ -335,20 +335,20 @@ def _safe_markdown_candidates(root: Path, label: str) -> list[Path]:
                 current /= part
                 info = _lstat(current)
                 if info is None:
-                    raise ContentSlimHandoffError(
+                    raise ContentKouboSlimHandoffError(
                         "asset_unreadable", f"{label}文件在检查时消失：{current}"
                     )
                 if stat.S_ISLNK(info.st_mode):
-                    raise ContentSlimHandoffError(
+                    raise ContentKouboSlimHandoffError(
                         "symlink_rejected", f"{label}包含软链接：{current}"
                     )
             if not stat.S_ISREG(os.lstat(candidate).st_mode):
-                raise ContentSlimHandoffError(
+                raise ContentKouboSlimHandoffError(
                     "asset_invalid", f"{label}包含非普通 Markdown：{candidate}"
                 )
             candidates.append(candidate)
     except OSError as exc:
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "asset_unreadable", f"{label}无法安全检查：{root}"
         ) from exc
     return candidates
@@ -375,7 +375,7 @@ def _frontmatter(path: Path, label: str) -> dict[str, Any]:
         with path.open("r", encoding="utf-8", newline=None) as handle:
             first = handle.readline()
             if first.rstrip("\n") != "---":
-                raise ContentSlimHandoffError(
+                raise ContentKouboSlimHandoffError(
                     "frontmatter_missing", f"{label}缺少 frontmatter：{path}"
                 )
             lines: list[str] = []
@@ -383,7 +383,7 @@ def _frontmatter(path: Path, label: str) -> dict[str, Any]:
             for line in handle:
                 total += len(line.encode("utf-8"))
                 if total > MAX_FRONTMATTER_BYTES:
-                    raise ContentSlimHandoffError(
+                    raise ContentKouboSlimHandoffError(
                         "frontmatter_invalid", f"{label} frontmatter 过大：{path}"
                     )
                 normalized = line.rstrip("\n")
@@ -391,13 +391,13 @@ def _frontmatter(path: Path, label: str) -> dict[str, Any]:
                     break
                 lines.append(normalized)
             else:
-                raise ContentSlimHandoffError(
+                raise ContentKouboSlimHandoffError(
                     "frontmatter_invalid", f"{label} frontmatter 未闭合：{path}"
                 )
-    except ContentSlimHandoffError:
+    except ContentKouboSlimHandoffError:
         raise
     except (OSError, UnicodeError) as exc:
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "frontmatter_invalid", f"{label} frontmatter 无法读取：{path}"
         ) from exc
 
@@ -416,7 +416,7 @@ def _frontmatter(path: Path, label: str) -> dict[str, Any]:
             continue
         key, raw_value = key_match.groups()
         if key in metadata:
-            raise ContentSlimHandoffError(
+            raise ContentKouboSlimHandoffError(
                 "frontmatter_invalid", f"{label}包含重复字段 {key}：{path}"
             )
         parsed = _scalar(raw_value)
@@ -435,7 +435,7 @@ def _asset_counts(method_root: Path, profile_root: Path) -> tuple[int, int, int]
     for candidate in _safe_markdown_candidates(method_root, "04 方法卡"):
         try:
             metadata = _frontmatter(candidate, "04 方法卡")
-        except ContentSlimHandoffError as exc:
+        except ContentKouboSlimHandoffError as exc:
             if exc.code in {"frontmatter_missing", "frontmatter_invalid"}:
                 skipped += 1
                 continue
@@ -475,7 +475,7 @@ def _asset_counts(method_root: Path, profile_root: Path) -> tuple[int, int, int]
     for candidate in _safe_markdown_candidates(profile_root, "05 Profile"):
         try:
             metadata = _frontmatter(candidate, "05 Profile")
-        except ContentSlimHandoffError as exc:
+        except ContentKouboSlimHandoffError as exc:
             if exc.code in {"frontmatter_missing", "frontmatter_invalid"}:
                 continue
             raise
@@ -491,26 +491,26 @@ def _preview_sha256(payload: dict[str, Any]) -> str:
     return _sha256_bytes(compact)
 
 
-def plan_content_slim_handoff(
+def plan_content_koubo_slim_handoff(
     *,
     binding: Binding,
     registry_path: str | Path | None = None,
     runs_root: str | Path | None = None,
     speaker_mode: str = "neutral",
     manifest_relative_path: str = CONTENT_MANIFEST_RELATIVE_PATH,
-) -> ContentSlimHandoffPlan:
+) -> ContentKouboSlimHandoffPlan:
     if binding.status != "active" or binding.backend_type != "obsidian":
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "backend_unsupported",
-            "Content Slim 当前只能接收一个 active 的 Obsidian 本地知识库。",
+            "Content 口播 Slim 当前只能接收一个 active 的 Obsidian 本地知识库。",
         )
     if not CLIENT_ID.fullmatch(binding.client_id):
-        raise ContentSlimHandoffError(
-            "client_id_invalid", "ZSK client_id 不符合 Content Slim 合同。"
+        raise ContentKouboSlimHandoffError(
+            "client_id_invalid", "ZSK client_id 不符合 Content 口播 Slim 合同。"
         )
     if speaker_mode not in SUPPORTED_SPEAKER_MODES:
-        raise ContentSlimHandoffError(
-            "speaker_mode_invalid", "讲述者模式不受 Content Slim 支持。"
+        raise ContentKouboSlimHandoffError(
+            "speaker_mode_invalid", "讲述者模式不受 Content 口播 Slim 支持。"
         )
 
     vault = _existing_directory(binding.backend_locator, "知识库")
@@ -520,11 +520,11 @@ def plan_content_slim_handoff(
     runs = _absolute_path(runs_root or default_content_runs_root(), "Runs 目录")
     runs_info = _lstat(runs)
     if runs_info is not None and not stat.S_ISDIR(runs_info.st_mode):
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "path_conflict", f"Runs 路径已被非目录对象占用：{runs}"
         )
     if _is_below(registry, vault) or _is_below(runs, vault):
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "binding_conflict", "Registry 和 Runs 必须位于知识库之外。"
         )
 
@@ -540,7 +540,7 @@ def plan_content_slim_handoff(
         roots["method"], roots["profile"]
     )
     if speaker_mode == "personal_ip" and primary != 1:
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "profile_contract_invalid",
             "personal_ip 模式必须且只能有一份 active primary Profile。",
         )
@@ -567,7 +567,7 @@ def plan_content_slim_handoff(
         "expected_registry": expected_registry,
         "registry_before_sha256": registry_before,
     }
-    return ContentSlimHandoffPlan(
+    return ContentKouboSlimHandoffPlan(
         client_id=binding.client_id,
         vault_root=vault,
         registry_path=registry,
@@ -592,7 +592,7 @@ def _ensure_directory(path: Path, created: list[Path]) -> None:
     info = _lstat(path)
     if info is not None:
         if not stat.S_ISDIR(info.st_mode):
-            raise ContentSlimHandoffError(
+            raise ContentKouboSlimHandoffError(
                 "path_conflict", f"目标不是目录：{path}"
             )
         return
@@ -601,20 +601,20 @@ def _ensure_directory(path: Path, created: list[Path]) -> None:
     while _lstat(current) is None:
         missing.append(current)
         if current.parent == current:
-            raise ContentSlimHandoffError(
+            raise ContentKouboSlimHandoffError(
                 "unsafe_path", f"无法确定安全父目录：{path}"
             )
         current = current.parent
     current_info = _lstat(current)
     if current_info is None or not stat.S_ISDIR(current_info.st_mode):
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "path_conflict", f"父路径不是目录：{current}"
         )
     for directory in reversed(missing):
         try:
             os.mkdir(directory, 0o700)
         except OSError as exc:
-            raise ContentSlimHandoffError(
+            raise ContentKouboSlimHandoffError(
                 "write_failed", f"无法创建目录：{directory}"
             ) from exc
         created.append(directory)
@@ -632,25 +632,25 @@ def _write_exclusive(path: Path, payload: bytes, created: list[Path]) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         if _read_regular_bytes(path, "写入文件") != payload:
-            raise ContentSlimHandoffError(
+            raise ContentKouboSlimHandoffError(
                 "readback_failed", f"写后回读不一致：{path}"
             )
-    except ContentSlimHandoffError:
+    except ContentKouboSlimHandoffError:
         raise
     except OSError as exc:
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "write_failed", f"无法 create-only 写入：{path}"
         ) from exc
 
 
 def _replace_registry(
-    plan: ContentSlimHandoffPlan,
+    plan: ContentKouboSlimHandoffPlan,
     *,
     previous_raw: bytes,
 ) -> bytes:
     current = _read_regular_bytes(plan.registry_path, "Registry")
     if _sha256_bytes(current) != plan.registry_before_sha256:
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "binding_conflict", "Registry 在确认后发生变化，未合并。"
         )
     payload = _json_bytes(plan.expected_registry)
@@ -661,13 +661,13 @@ def _replace_registry(
     try:
         _write_exclusive(temporary, payload, created)
         if _sha256_bytes(_read_regular_bytes(plan.registry_path, "Registry")) != plan.registry_before_sha256:
-            raise ContentSlimHandoffError(
+            raise ContentKouboSlimHandoffError(
                 "binding_conflict", "Registry 在写入前发生变化，未合并。"
             )
         os.replace(temporary, plan.registry_path)
         created.clear()
         if _read_regular_bytes(plan.registry_path, "Registry") != payload:
-            raise ContentSlimHandoffError(
+            raise ContentKouboSlimHandoffError(
                 "readback_failed", "Registry 合并后回读不一致。"
             )
         return payload
@@ -703,7 +703,7 @@ def _rollback_created(files: list[Path], directories: list[Path]) -> None:
             info = _lstat(path)
             if info is not None and stat.S_ISREG(info.st_mode):
                 os.unlink(path)
-        except (OSError, ContentSlimHandoffError):
+        except (OSError, ContentKouboSlimHandoffError):
             pass
     for path in reversed(directories):
         try:
@@ -713,7 +713,7 @@ def _rollback_created(files: list[Path], directories: list[Path]) -> None:
 
 
 def _response(
-    plan: ContentSlimHandoffPlan,
+    plan: ContentKouboSlimHandoffPlan,
     *,
     status: str,
     reused: bool,
@@ -727,12 +727,12 @@ def _response(
             if waiting
             else "已有配置已安全复用。"
             if reused
-            else "Content Slim 配置已写入并回读。"
+            else "Content 口播 Slim 配置已写入并回读。"
         ),
         "next_action": (
             "确认本次预览，或取消连接。"
             if waiting
-            else "安装或重新打开 Content Slim 后即可开始口播任务。"
+            else "安装或重新打开 Content 口播 Slim 后即可开始口播任务。"
         ),
         "confirmation": plan.preview_sha256 if waiting else None,
         "binding": {
@@ -752,7 +752,7 @@ def _response(
     }
 
 
-def configure_content_slim_handoff(
+def configure_content_koubo_slim_handoff(
     *,
     binding: Binding,
     registry_path: str | Path | None = None,
@@ -761,7 +761,7 @@ def configure_content_slim_handoff(
     manifest_relative_path: str = CONTENT_MANIFEST_RELATIVE_PATH,
     confirmation: str | None = None,
 ) -> dict[str, Any]:
-    plan = plan_content_slim_handoff(
+    plan = plan_content_koubo_slim_handoff(
         binding=binding,
         registry_path=registry_path,
         runs_root=runs_root,
@@ -773,7 +773,7 @@ def configure_content_slim_handoff(
     if confirmation is None:
         return _response(plan, status="waiting", reused=False)
     if confirmation != plan.preview_sha256:
-        raise ContentSlimHandoffError(
+        raise ContentKouboSlimHandoffError(
             "confirmation_mismatch", "确认信息与当前预览不一致，零写入。"
         )
 
@@ -805,11 +805,11 @@ def configure_content_slim_handoff(
         manifest_value, _ = _read_json(plan.manifest_path, "Manifest")
         registry_value, _ = _read_json(plan.registry_path, "Registry")
         if manifest_value != plan.expected_manifest or registry_value != plan.expected_registry:
-            raise ContentSlimHandoffError(
+            raise ContentKouboSlimHandoffError(
                 "readback_failed", "配置写后回读与确认预览不一致。"
             )
         if not plan.runs_root.is_dir() or plan.runs_root.is_symlink():
-            raise ContentSlimHandoffError(
+            raise ContentKouboSlimHandoffError(
                 "readback_failed", "Runs 目录写后回读失败。"
             )
     except Exception:

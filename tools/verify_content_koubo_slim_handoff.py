@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify a fresh installed ZSK-to-Content-Slim Obsidian handoff."""
+"""Verify a fresh installed ZSK-to-Content-Koubo-Slim Obsidian handoff."""
 
 from __future__ import annotations
 
@@ -19,11 +19,11 @@ TASK_ID = "01a01e29-a6ba-73a2-82e6-4ad1caa0f33b"
 
 def _install_content_copy(content_root: Path, destination: Path) -> None:
     for name in (
-        "content-slim",
-        "content-analyzer",
-        "content-context-retriever",
-        "content-writer",
-        "content-publish-pack",
+        "content-koubo-slim",
+        "content-koubo-analyzer",
+        "content-koubo-context-retriever",
+        "content-koubo-writer",
+        "content-koubo-publish-pack",
     ):
         source = content_root / "Skills" / name
         target = destination / name
@@ -33,8 +33,8 @@ def _install_content_copy(content_root: Path, destination: Path) -> None:
 
 
 def verify(content_root: Path) -> dict[str, object]:
-    if not (content_root / "Skills" / "content-slim" / "SKILL.md").is_file():
-        raise RuntimeError("Content Slim root is incomplete")
+    if not (content_root / "Skills" / "content-koubo-slim" / "SKILL.md").is_file():
+        raise RuntimeError("Content 口播 Slim root is incomplete")
     content_verified = subprocess.run(
         [sys.executable, "-B", str(content_root / "tools" / "verify.py")],
         cwd=content_root,
@@ -45,7 +45,7 @@ def verify(content_root: Path) -> dict[str, object]:
     )
     if content_verified.returncode != 0:
         raise RuntimeError(
-            "Content Slim verification failed: "
+            "Content 口播 Slim verification failed: "
             + content_verified.stdout
             + content_verified.stderr
         )
@@ -55,7 +55,7 @@ def verify(content_root: Path) -> dict[str, object]:
         else Path(tempfile.gettempdir()).resolve()
     )
     with tempfile.TemporaryDirectory(
-        prefix="zsk-content-fresh-", dir=temporary_parent
+        prefix="zsk-content-koubo-fresh-", dir=temporary_parent
     ) as directory:
         parent = Path(directory)
         installed_skills = parent / "installed-skills"
@@ -88,8 +88,16 @@ def verify(content_root: Path) -> dict[str, object]:
         vault = parent / "vault"
         vault.mkdir(mode=0o700)
         host_root = parent / "host"
-        registry = host_root / ".content-v2-slim" / "client-registry.json"
-        runs = host_root / ".content-v2-slim" / "runs"
+        legacy_config = host_root / ".content-v2-slim"
+        legacy_runs = legacy_config / "runs"
+        legacy_runs.mkdir(parents=True)
+        legacy_registry = legacy_config / "client-registry.json"
+        legacy_registry.write_text('{"legacy": true}\n', encoding="utf-8")
+        legacy_run = legacy_runs / "saved-run.json"
+        legacy_run.write_text('{"state": "saved"}\n', encoding="utf-8")
+        legacy_before = (legacy_registry.read_bytes(), legacy_run.read_bytes())
+        registry = host_root / ".content-koubo-slim" / "client-registry.json"
+        runs = host_root / ".content-koubo-slim" / "runs"
         reference = parent / "reference.md"
         reference.write_text(
             "# 参考\n\n先确认需求，再形成书面方案。\n", encoding="utf-8"
@@ -189,7 +197,7 @@ def verify(content_root: Path) -> dict[str, object]:
         handoff_env = os.environ.copy()
         handoff_env["CODEX_HOME"] = str(host_root)
         handoff_env["PYTHONDONTWRITEBYTECODE"] = "1"
-        handoff_cli = installed_skills / "shared" / "configure_content_slim.py"
+        handoff_cli = installed_skills / "shared" / "configure_content_koubo_slim.py"
         handoff_command = [
             sys.executable,
             "-B",
@@ -210,7 +218,7 @@ def verify(content_root: Path) -> dict[str, object]:
             check=False,
         )
         preview = json.loads(preview_process.stdout)
-        manifest = vault / "06-Agent与Workflow" / "content-client-manifest.json"
+        manifest = vault / "06-Agent与Workflow" / "content-koubo-client-manifest.json"
         if (
             preview_process.returncode != 0
             or preview.get("status") != "waiting"
@@ -231,7 +239,7 @@ def verify(content_root: Path) -> dict[str, object]:
         if completed_process.returncode != 0 or completed.get("status") != "completed":
             raise RuntimeError("handoff confirmation did not complete")
 
-        content_skill = installed_skills / "content-slim"
+        content_skill = installed_skills / "content-koubo-slim"
         sys.path.insert(0, str(content_skill))
         from runtime.client_manifest import load_manifest
         from runtime.client_registry import load_registry, resolve_client, select_client_id
@@ -252,7 +260,7 @@ def verify(content_root: Path) -> dict[str, object]:
             vault / "05-IP-Profile", {"status": "active", "is_primary": True}
         )
         if len(knowledge_assets) != 1 or len(method_assets) != 1:
-            raise RuntimeError("Content Slim did not read ZSK 03/04")
+            raise RuntimeError("Content 口播 Slim did not read ZSK 03/04")
 
         env = os.environ.copy()
         env["CODEX_HOME"] = str(host_root)
@@ -261,7 +269,7 @@ def verify(content_root: Path) -> dict[str, object]:
             [
                 sys.executable,
                 "-B",
-                str(content_skill / "scripts" / "content_slim.py"),
+                str(content_skill / "scripts" / "content_koubo_slim.py"),
                 "start",
                 "--topic-original",
                 "如何先确认需求再给方案",
@@ -297,6 +305,8 @@ def verify(content_root: Path) -> dict[str, object]:
             or reused.get("confirmation") is not None
         ):
             raise RuntimeError("confirmed handoff was not reusable")
+        if (legacy_registry.read_bytes(), legacy_run.read_bytes()) != legacy_before:
+            raise RuntimeError("legacy Content Slim config or Run was modified")
         return {
             "status": "passed",
             "fresh_zsk_install": True,
@@ -308,17 +318,18 @@ def verify(content_root: Path) -> dict[str, object]:
             "content_run_created": True,
             "final_output_created": False,
             "binding_reused": True,
+            "legacy_config_preserved": True,
         }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="验证 ZSK 到独立 Content Slim 仓库的本地交接"
+        description="验证 ZSK 到独立 Content 口播 Slim 仓库的本地交接"
     )
-    parser.add_argument("--content-slim-root", required=True, type=Path)
+    parser.add_argument("--content-koubo-slim-root", required=True, type=Path)
     args = parser.parse_args()
     try:
-        result = verify(args.content_slim_root.resolve())
+        result = verify(args.content_koubo_slim_root.resolve())
     except Exception as exc:
         result = {"status": "failed", "message": str(exc)}
         exit_code = 1

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Preview, confirm, or reuse one Content Slim handoff from ZSK."""
+"""Preview, confirm, or reuse one Content 口播 Slim handoff from ZSK."""
 
 from __future__ import annotations
 
@@ -14,9 +14,9 @@ SKILLS_ROOT = SHARED_ROOT.parent
 if str(SKILLS_ROOT) not in sys.path:
     sys.path.insert(0, str(SKILLS_ROOT))
 
-from shared.content_slim_handoff import (  # noqa: E402
-    ContentSlimHandoffError,
-    configure_content_slim_handoff,
+from shared.content_koubo_slim_handoff import (  # noqa: E402
+    ContentKouboSlimHandoffError,
+    configure_content_koubo_slim_handoff,
 )
 from shared.contracts import BINDING_SCHEMA, ROOT_KEYS, Binding  # noqa: E402
 from shared.templates import TEMPLATE_VERSION  # noqa: E402
@@ -24,7 +24,7 @@ from shared.templates import TEMPLATE_VERSION  # noqa: E402
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="把一个已确认的 Obsidian 知识库安全连接给 Content Slim"
+        description="把一个已确认的 Obsidian 知识库安全连接给 Content 口播 Slim"
     )
     parser.add_argument("--vault-root", required=True)
     parser.add_argument("--client-id", required=True)
@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
             {key: f"root:{key}" for key in ROOT_KEYS},
             TEMPLATE_VERSION,
         )
-        response = configure_content_slim_handoff(
+        response = configure_content_koubo_slim_handoff(
             binding=binding,
             registry_path=args.registry,
             runs_root=args.runs_root,
@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
             confirmation=args.confirmation,
         )
         exit_code = 0
-    except (ContentSlimHandoffError, ValueError) as exc:
+    except (ContentKouboSlimHandoffError, ValueError) as exc:
         response = {
             "status": "blocked",
             "status_label": "内容资料库连接未完成",

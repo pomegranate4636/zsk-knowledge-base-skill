@@ -45,10 +45,10 @@ def validate_source(source_root: Path) -> list[str]:
         errors.append("缺少统一 Markdown 转换模块：shared/markdown_converter.py")
     if not (source_root / "shared" / "page_renderer.py").is_file():
         errors.append("缺少可选页级证据模块：shared/page_renderer.py")
-    if not (source_root / "shared" / "content_slim_handoff.py").is_file():
-        errors.append("缺少 Content Slim 配置交接模块：shared/content_slim_handoff.py")
-    if not (source_root / "shared" / "configure_content_slim.py").is_file():
-        errors.append("缺少 Content Slim 配置交接入口：shared/configure_content_slim.py")
+    if not (source_root / "shared" / "content_koubo_slim_handoff.py").is_file():
+        errors.append("缺少 Content 口播 Slim 配置交接模块：shared/content_koubo_slim_handoff.py")
+    if not (source_root / "shared" / "configure_content_koubo_slim.py").is_file():
+        errors.append("缺少 Content 口播 Slim 配置交接入口：shared/configure_content_koubo_slim.py")
     return errors
 
 
@@ -60,8 +60,8 @@ def installed_state(destination: Path) -> tuple[list[str], list[str]]:
         valid = target.is_dir() and (
             (target / "markdown_converter.py").is_file()
             and (target / "page_renderer.py").is_file()
-            and (target / "content_slim_handoff.py").is_file()
-            and (target / "configure_content_slim.py").is_file()
+            and (target / "content_koubo_slim_handoff.py").is_file()
+            and (target / "configure_content_koubo_slim.py").is_file()
             if name == "shared" else (target / "SKILL.md").is_file()
         )
         (present if valid else missing).append(name)
