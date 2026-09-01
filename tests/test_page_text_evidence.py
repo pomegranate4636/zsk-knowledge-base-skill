@@ -3,17 +3,22 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import sys
+import subprocess
+import tempfile
 import unittest
 import zipfile
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "skills"))
 
 from shared.contracts import PageArtifact, PageTextEvidence  # noqa: E402
-from shared.ocr_provider import OcrResult  # noqa: E402
+from shared import ocr_provider  # noqa: E402
+from shared.ocr_provider import OcrFailed, OcrResult, OcrUnavailable, TesseractOcrProvider  # noqa: E402
 from shared.page_text import OcrReviewRequired, build_page_text_evidence, extract_pptx_page_text  # noqa: E402
 from shared.page_renderer import RenderedPage  # noqa: E402
 
@@ -81,6 +86,52 @@ class FakeOcr:
 
 
 class PageTextEvidenceTests(unittest.TestCase):
+    def test_tesseract_provider_parses_local_tsv_confidence(self) -> None:
+        header = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext"
+        output = header + "\n5\t1\t1\t1\t1\t1\t0\t0\t10\t10\t90\tHello\n5\t1\t1\t1\t1\t2\t0\t0\t10\t10\t80\t世界\n"
+        completed = subprocess.CompletedProcess(("tesseract",), 0, output, "")
+        with mock.patch("shared.ocr_provider.subprocess.run", return_value=completed):
+            result = TesseractOcrProvider("tesseract.exe").recognize(PNG_1)
+        self.assertEqual(result.text, "Hello 世界")
+        self.assertAlmostEqual(result.confidence, 0.871428, places=5)
+
+    def test_tesseract_provider_fails_closed(self) -> None:
+        completed = subprocess.CompletedProcess(("tesseract",), 1, "", "failed")
+        with mock.patch("shared.ocr_provider.subprocess.run", return_value=completed):
+            with self.assertRaises(OcrFailed):
+                TesseractOcrProvider("tesseract.exe").recognize(PNG_1)
+        with mock.patch("shared.ocr_provider._tesseract_executable", return_value=None):
+            with self.assertRaises(OcrUnavailable):
+                TesseractOcrProvider()
+        with self.assertRaises(OcrFailed):
+            TesseractOcrProvider("tesseract.exe").recognize(b"")
+        with mock.patch(
+            "shared.ocr_provider.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(("tesseract.exe",), 120),
+        ):
+            with self.assertRaises(OcrFailed):
+                TesseractOcrProvider("tesseract.exe").recognize(PNG_1)
+
+    def test_provider_finds_standard_windows_install_path(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            executable = Path(folder) / "Tesseract-OCR" / "tesseract.exe"
+            executable.parent.mkdir()
+            executable.write_bytes(b"exe")
+            with mock.patch.dict(os.environ, {"ProgramFiles": folder}, clear=False):
+                with mock.patch.object(ocr_provider.platform, "system", return_value="Windows"):
+                    with mock.patch.object(ocr_provider.shutil, "which", return_value=None):
+                        self.assertEqual(ocr_provider._tesseract_executable(), str(executable))
+
+    def test_provider_uses_user_level_tessdata_directory(self) -> None:
+        tessdata = Path("C:/fake/tessdata")
+        completed = subprocess.CompletedProcess(("tesseract",), 0, "", "")
+        with mock.patch("shared.ocr_provider._tessdata_directory", return_value=tessdata):
+            with mock.patch("shared.ocr_provider.subprocess.run", return_value=completed) as run:
+                TesseractOcrProvider("tesseract.exe").recognize(PNG_1)
+        command = run.call_args.args[0]
+        self.assertIn("--tessdata-dir", command)
+        self.assertIn(str(tessdata), command)
+
     def test_extracts_native_text_and_detects_image_only_page(self) -> None:
         pages = extract_pptx_page_text(pptx_payload())
         self.assertEqual([item.page_number for item in pages], [1, 2])

@@ -45,6 +45,7 @@ class TesseractOcrProvider:
     def __init__(self, executable: str | None = None, languages: str = "chi_sim+eng") -> None:
         self.executable = executable or _tesseract_executable() or ""
         self.languages = languages
+        self.tessdata_directory = _tessdata_directory()
         if not self.executable:
             raise OcrUnavailable("tesseract executable is unavailable")
 
@@ -55,8 +56,12 @@ class TesseractOcrProvider:
             path = Path(folder) / "page.png"
             path.write_bytes(image)
             try:
+                command = [self.executable, str(path), "stdout", "-l", self.languages]
+                if self.tessdata_directory is not None:
+                    command.extend(("--tessdata-dir", str(self.tessdata_directory)))
+                command.append("tsv")
                 completed = subprocess.run(
-                    (self.executable, str(path), "stdout", "-l", self.languages, "tsv"),
+                    tuple(command),
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
@@ -110,4 +115,22 @@ def _tesseract_executable() -> str | None:
         candidate = Path(value) / "Tesseract-OCR" / "tesseract.exe"
         if candidate.is_file():
             return str(candidate)
+    return None
+
+
+def _tessdata_directory() -> Path | None:
+    candidates: list[Path] = []
+    configured = os.environ.get("TESSDATA_PREFIX")
+    if configured:
+        candidates.append(Path(configured))
+    user_profile = os.environ.get("USERPROFILE")
+    if user_profile:
+        candidates.append(Path(user_profile) / ".codex" / "ocr" / "tessdata")
+    for candidate in candidates:
+        if (
+            (candidate / "chi_sim.traineddata").is_file()
+            and (candidate / "eng.traineddata").is_file()
+            and (candidate / "configs" / "tsv").is_file()
+        ):
+            return candidate
     return None

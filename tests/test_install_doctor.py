@@ -83,6 +83,16 @@ class InstallDoctorTests(unittest.TestCase):
                     with mock.patch.object(install.shutil, "which", return_value=None):
                         self.assertEqual(install.tesseract_executable(), str(executable))
 
+    def test_doctor_uses_user_level_tessdata_directory(self) -> None:
+        tessdata = Path("C:/fake/tessdata")
+        completed = install.subprocess.CompletedProcess(("tesseract",), 0, "chi_sim\neng\n", "")
+        with mock.patch.object(install, "tesseract_executable", return_value="tesseract.exe"):
+            with mock.patch.object(install, "tessdata_directory", return_value=tessdata):
+                with mock.patch.object(install.subprocess, "run", return_value=completed) as run:
+                    status = install.local_ocr_status()
+            self.assertTrue(status["ready"])
+            self.assertEqual(run.call_args.args[0], ("tesseract.exe", "--tessdata-dir", str(tessdata), "--list-langs"))
+
     def test_markitdown_skill_is_a_required_component(self) -> None:
         self.assertIn("markitdown-skill", install.COMPONENTS)
         self.assertTrue((ROOT / "skills" / "markitdown-skill" / "SKILL.md").is_file())

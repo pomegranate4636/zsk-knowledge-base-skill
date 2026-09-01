@@ -165,13 +165,37 @@ def tesseract_executable() -> str | None:
     return None
 
 
+def tessdata_directory() -> Path | None:
+    candidates: list[Path] = []
+    configured = os.environ.get("TESSDATA_PREFIX")
+    if configured:
+        candidates.append(Path(configured))
+    user_profile = os.environ.get("USERPROFILE")
+    if user_profile:
+        candidates.append(Path(user_profile) / ".codex" / "ocr" / "tessdata")
+    for candidate in candidates:
+        if (
+            (candidate / "chi_sim.traineddata").is_file()
+            and (candidate / "eng.traineddata").is_file()
+            and (candidate / "configs" / "tsv").is_file()
+        ):
+            return candidate
+    return None
+
+
 def local_ocr_status() -> dict[str, bool | str | tuple[str, ...] | None]:
     executable = tesseract_executable()
     if not executable:
         return {"ready": False, "engine": None, "languages": ()}
     try:
+        directory = tessdata_directory()
+        command = (
+            (executable, "--tessdata-dir", str(directory), "--list-langs")
+            if directory
+            else (executable, "--list-langs")
+        )
         completed = subprocess.run(
-            (executable, "--list-langs"),
+            command,
             capture_output=True,
             text=True,
             timeout=15,
