@@ -15,7 +15,7 @@ from shared.feishu_cli import RecordedCliCall, RecordedCliRunner  # noqa: E402
 from shared.feishu_stage5 import FeishuStage5Storage  # noqa: E402
 
 
-PNG = b"\x89PNG\r\n\x1a\nremote-page"
+PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x06@\x00\x00\x03\x84remote-page"
 SOURCE_ID = "SRC-" + hashlib.sha256(b"deck").hexdigest()[:24]
 PAGE_SHA = hashlib.sha256(PNG).hexdigest()
 
@@ -86,6 +86,7 @@ def calls(downloaded: bytes) -> tuple[RecordedCliCall, ...]:
     return (
         RecordedCliCall(list_call, '{"ok":true,"data":{"items":[{"title":"资料","obj_type":"docx","obj_token":"readable-token"}]}}'),
         RecordedCliCall(fetch_markdown, json.dumps({"ok": True, "data": {"document": {"content": readable}}}, ensure_ascii=False)),
+        RecordedCliCall(fetch_full, json.dumps({"ok": True, "data": {"document": {"content": "<title>资料</title><p>校对正文</p>", "reference_map": {}}}}, ensure_ascii=False)),
         RecordedCliCall(
             media_insert,
             '{"ok":true,"data":{"document_id":"readable-token","block_id":"blk","file_token":"media-token"}}',
@@ -98,6 +99,13 @@ def calls(downloaded: bytes) -> tuple[RecordedCliCall, ...]:
 
 
 class FeishuSourcePageReadbackTests(unittest.TestCase):
+    def test_readable_body_tampering_is_not_hidden_by_unchanged_hash_markers(self) -> None:
+        payload = "## 页级校对正文\n\n校对正文".encode("utf-8")
+        stored = FeishuStage5Storage._document("资料", payload)
+        self.assertTrue(FeishuStage5Storage._matches_document("资料", payload, stored))
+        tampered = stored.replace("校对正文", "被篡改正文")
+        self.assertFalse(FeishuStage5Storage._matches_document("资料", payload, tampered))
+
     def test_embeds_page_and_reads_back_count_dimensions_and_hash(self) -> None:
         record, page = source()
         runner = RecordedCliRunner(calls(PNG))

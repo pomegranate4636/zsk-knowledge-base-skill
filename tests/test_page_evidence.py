@@ -61,6 +61,8 @@ def rendered(payload: bytes = PNG) -> RenderedPages:
         1,
         "page-001.png",
         hashlib.sha256(payload).hexdigest(),
+        1600,
+        900,
     )
     return RenderedPages((RenderedPage(artifact, payload),), 1, "pdftoppm")
 
@@ -171,7 +173,7 @@ class PageEvidenceIntakeTests(unittest.TestCase):
 
 
 class PageEvidenceStorageTests(unittest.TestCase):
-    def test_feishu_page_name_is_human_readable_and_listed_after_upload(self) -> None:
+    def test_feishu_page_is_not_uploaded_as_a_sibling_drive_file(self) -> None:
         source_id = "SRC-" + hashlib.sha256(b"pdf").hexdigest()[:24]
         page = rendered().pages[0].artifact
         source = SourceRecord(
@@ -194,17 +196,12 @@ class PageEvidenceStorageTests(unittest.TestCase):
             page_artifacts=(page,),
             display_name="2026-08-31 资料",
         )
-        name = "2026-08-31 资料-第001页.png"
         list_call = ("lark-cli", "--as", "user", "wiki", "nodes", "list", "--space-id", "1", "--parent-node-token", "root-01", "--page-all", "--format", "json")
-        upload_call = ("lark-cli", "--as", "user", "drive", "+upload", "--file", "{file}", "--wiki-token", "root-01", "--name", name, "--format", "json")
         runner = RecordedCliRunner((
             RecordedCliCall(list_call, '{"ok":true,"data":{"items":[]}}'),
-            RecordedCliCall(upload_call, '{"ok":true,"data":{"file_token":"token"}}', payload=PNG, upload_name=name),
-            RecordedCliCall(list_call, '{"ok":true,"data":{"items":[{"title":"' + name + '","obj_type":"file","obj_token":"token"}]}}'),
         ))
         result = FeishuStage5Storage(runner, "1", {"01": "root-01", "02": "root-02"}).store_page_evidence(source, page, PNG)
-        self.assertEqual(result.status, "ok")
-        self.assertEqual(result.object_refs[0].object_kind, "source_page")
+        self.assertEqual((result.status, result.code), ("blocked", "ownership_unknown"))
         self.assertTrue(runner.exhausted)
 
     def test_feishu_human_named_source_can_be_found_in_a_fresh_run(self) -> None:
