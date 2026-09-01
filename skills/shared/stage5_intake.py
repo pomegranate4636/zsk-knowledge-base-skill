@@ -17,7 +17,7 @@ from .contracts import BINDING_SCHEMA, SOURCE_ROLES, SOURCE_SCHEMA, TASK_ID, Bac
 from .markdown_converter import ConversionFailed, ConverterUnavailable, MarkdownConversion, convert_to_markdown
 from .naming import human_source_label, page_file_name
 from .page_renderer import PageRenderFailed, PageRendererUnavailable, RenderedPage, render_page_evidence
-from .ocr_provider import LocalOcrProvider, OcrFailed, OcrUnavailable, default_local_ocr_provider
+from .ocr_provider import LocalOcrProvider, OcrFailed, OcrUnavailable
 from .page_text import OcrReviewRequired, PageTextFailed, build_page_text_evidence
 
 
@@ -172,13 +172,12 @@ class Stage5Intake:
         page_text_evidence: tuple[PageTextEvidence, ...] = ()
         if page_artifacts:
             try:
-                provider = self.ocr_provider or default_local_ocr_provider()
                 page_text_evidence = build_page_text_evidence(
                     source_id,
                     suffix,
                     request.payload,
                     rendered_pages,
-                    provider,
+                    self.ocr_provider,
                     corrections=request.ocr_corrections,
                     confidence_threshold=self.ocr_confidence_threshold,
                 )

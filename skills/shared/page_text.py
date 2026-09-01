@@ -11,7 +11,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 from .contracts import PageTextEvidence
-from .ocr_provider import LocalOcrProvider, OcrFailed, OcrUnavailable
+from .ocr_provider import LocalOcrProvider, OcrFailed, OcrUnavailable, default_local_ocr_provider
 from .page_renderer import RenderedPage
 
 
@@ -87,7 +87,7 @@ def build_page_text_evidence(
     suffix: str,
     source_payload: bytes,
     rendered_pages: tuple[RenderedPage, ...],
-    provider: LocalOcrProvider,
+    provider: LocalOcrProvider | None,
     *,
     corrections: Mapping[int, str] | None = None,
     confidence_threshold: float = 0.85,
@@ -109,6 +109,7 @@ def build_page_text_evidence(
 
     evidence: list[PageTextEvidence] = []
     review_required: list[int] = []
+    active_provider = provider
     for page_input, rendered in zip(page_inputs, rendered_pages, strict=True):
         native = page_input.native_text
         ocr_text = ""
@@ -117,8 +118,10 @@ def build_page_text_evidence(
         status = "verified_native"
         verbatim = native
         if page_input.requires_ocr:
+            if active_provider is None:
+                active_provider = default_local_ocr_provider()
             try:
-                result = provider.recognize(rendered.payload)
+                result = active_provider.recognize(rendered.payload)
             except OcrUnavailable:
                 raise
             except OcrFailed:

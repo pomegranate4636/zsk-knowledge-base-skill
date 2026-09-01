@@ -23,6 +23,15 @@ COMPONENTS = (
 )
 MARKITDOWN_SPEC = "markitdown[docx,pdf,pptx,xlsx]==0.1.6"
 MARKITDOWN_INSTALL_TIMEOUT_SECONDS = 600
+SHARED_REQUIRED_FILES = (
+    "markdown_converter.py",
+    "page_renderer.py",
+    "content_koubo_slim_handoff.py",
+    "configure_content_koubo_slim.py",
+    "naming.py",
+    "page_text.py",
+    "ocr_provider.py",
+)
 MAC_POWERPOINT = Path("/Applications/Microsoft PowerPoint.app")
 WINDOWS_POWERPOINT_DETECTION_SCRIPT = (
     "$powerPointType=[type]::GetTypeFromProgID('PowerPoint.Application');"
@@ -45,14 +54,9 @@ def validate_source(source_root: Path) -> list[str]:
             errors.append(f"缺少组件目录：{component}")
         if name != "shared" and not (component / "SKILL.md").is_file():
             errors.append(f"缺少 Skill 入口：{component / 'SKILL.md'}")
-    if not (source_root / "shared" / "markdown_converter.py").is_file():
-        errors.append("缺少统一 Markdown 转换模块：shared/markdown_converter.py")
-    if not (source_root / "shared" / "page_renderer.py").is_file():
-        errors.append("缺少可选页级证据模块：shared/page_renderer.py")
-    if not (source_root / "shared" / "content_koubo_slim_handoff.py").is_file():
-        errors.append("缺少 Content 口播 Slim 配置交接模块：shared/content_koubo_slim_handoff.py")
-    if not (source_root / "shared" / "configure_content_koubo_slim.py").is_file():
-        errors.append("缺少 Content 口播 Slim 配置交接入口：shared/configure_content_koubo_slim.py")
+    for name in SHARED_REQUIRED_FILES:
+        if not (source_root / "shared" / name).is_file():
+            errors.append(f"缺少 shared 必需模块：shared/{name}")
     return errors
 
 
@@ -62,10 +66,7 @@ def installed_state(destination: Path) -> tuple[list[str], list[str]]:
     for name in COMPONENTS:
         target = destination / name
         valid = target.is_dir() and (
-            (target / "markdown_converter.py").is_file()
-            and (target / "page_renderer.py").is_file()
-            and (target / "content_koubo_slim_handoff.py").is_file()
-            and (target / "configure_content_koubo_slim.py").is_file()
+            all((target / required).is_file() for required in SHARED_REQUIRED_FILES)
             if name == "shared" else (target / "SKILL.md").is_file()
         )
         (present if valid else missing).append(name)
@@ -144,6 +145,50 @@ def page_evidence_status() -> dict[str, bool | str | None]:
     else:
         ppt_engine = None
     return {"pdf": pdf_ready, "pptx": bool(pdf_ready and ppt_engine), "pptx_engine": ppt_engine}
+
+
+def tesseract_executable() -> str | None:
+    executable = shutil.which("tesseract")
+    if executable:
+        return executable
+    if platform.system() != "Windows":
+        return None
+    roots = tuple(
+        Path(value)
+        for key in ("ProgramFiles", "ProgramFiles(x86)")
+        if (value := os.environ.get(key))
+    )
+    for root in roots:
+        candidate = root / "Tesseract-OCR" / "tesseract.exe"
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def local_ocr_status() -> dict[str, bool | str | tuple[str, ...] | None]:
+    executable = tesseract_executable()
+    if not executable:
+        return {"ready": False, "engine": None, "languages": ()}
+    try:
+        completed = subprocess.run(
+            (executable, "--list-langs"),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+            shell=False,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {"ready": False, "engine": "Tesseract", "languages": ()}
+    raw = completed.stdout + "\n" + completed.stderr
+    languages = tuple(sorted({line.strip() for line in raw.splitlines() if line.strip() in {"chi_sim", "eng"}}))
+    return {
+        "ready": completed.returncode == 0 and {"chi_sim", "eng"}.issubset(languages),
+        "engine": "Tesseract",
+        "languages": languages,
+    }
 
 
 def _mac_powerpoint_ready() -> bool:
@@ -252,10 +297,13 @@ def main() -> int:
         present, missing = installed_state(destination)
         version = converter_version()
         pages = page_evidence_status()
+        ocr = local_ocr_status()
         print("组件：" + ("齐全" if not missing else "缺少 " + "、".join(missing)))
         print("MarkItDown：" + (version or "不可用"))
         pptx_state = "不可用" if not pages["pptx"] else f"可用（{pages['pptx_engine']}）"
         print("页级证据（可选）：PDF " + ("可用" if pages["pdf"] else "不可用") + "；PPTX " + pptx_state)
+        language_text = "+".join(ocr["languages"]) if ocr["languages"] else "无"
+        print("本地 OCR（页级证据增强）：" + (f"可用（{ocr['engine']}；{language_text}）" if ocr["ready"] else f"不可用（语言：{language_text}）"))
         return 0 if not missing and version else 1
 
     source_root = Path(__file__).resolve().parent / "skills"

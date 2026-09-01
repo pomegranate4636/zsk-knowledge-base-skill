@@ -68,7 +68,7 @@ python3 tools/verify_content_koubo_slim_handoff.py \
 
 三者关系很简单：WorkBuddy 是执行工作的工具，ZSK 是告诉它如何建库和入库的 Skill，飞书知识库是最终保存资料的位置。安装 ZSK 不等于已经创建飞书知识库；必须先连接客户自己的飞书账号，再由客户确认创建或绑定哪个知识库。
 
-对于页面版式、图表或截图本身影响含义的 PDF/PPTX，可以在用户明确同意后启用通用“完整页证据”。它不包含任何行业专用规则，也不会默认增加到每次入库。
+对于页面版式、图表或截图本身影响含义的 PDF/PPTX，可以在用户明确同意后启用通用“完整页证据”。它保存高清原页图，按页提取 PPT 原生文字，并对图片页使用本地 OCR；低置信页面必须校对后才能进入知识卡。它不包含任何行业专用规则，也不会默认增加到每次入库。
 
 客户不需要手工选择资料应该放 03、04 还是 05。同一份资料可以拆出业务事实、通用方法和主体资料，分别入库；机器指纹只留在元数据中，客户看到的是“日期＋中文标题”的目录和文件名。分类拿不准时留在 01，不把普通分类问题塞进 02。
 
@@ -122,7 +122,7 @@ Windows 出现安全软件拦截 `lark-cli.CMD` 或其可信 Node.js 运行程�
 
 ZSK 不让大模型直接读取 Office 或 PDF。安装包内含 `markitdown-skill`，它是必装配套能力但不是客户业务入口。MD/TXT/CSV 可直接入库；DOCX、PPTX、XLSX、PDF、HTML、JSON 由 Microsoft MarkItDown 在本机转换为唯一正式 `readable.md`。
 
-首次安装后，用最小格式集合安装并检查转换器；不使用 `markitdown[all]`，因为图片 OCR、音视频和联网扩展不属于当前版本：
+首次安装后，用最小格式集合安装并检查转换器；不使用 `markitdown[all]`，因为页图 OCR 由 ZSK 的独立本地 Provider 负责，音视频和联网扩展不属于当前版本：
 
 ```bash
 python3 zsk-knowledge-base-skill/install.py --install-markitdown
@@ -136,13 +136,13 @@ pipx inject --force markitdown 'markitdown[docx,pdf,pptx,xlsx]==0.1.6'
 python3 zsk-knowledge-base-skill/install.py --doctor
 ```
 
-Doctor 未通过时，富文档会准确停止并进入 02；不会静默换用另一套解析器，也不会把资料交给大模型。Doctor 还会单独显示可选的 PDF/PPTX 页级证据能力；这项可选能力不可用不会阻断普通文字入库。
+Doctor 未通过时，富文档会准确停止并进入 02；不会静默换用另一套解析器，也不会把资料交给大模型。Doctor 还会分别显示 PDF/PPTX 页级渲染与本地 OCR 状态；这些增强能力不可用不会阻断普通文字入库，但启用完整页证据时会 fail closed。
 
 ## 当前范围与后续范围
 
 - 当前默认：MD、TXT、CSV，以及经 MarkItDown 转换的 DOCX、PPTX、XLSX、PDF、HTML、JSON。
-- 当前可选：PDF/PPTX 完整页图、连续页码、页图 SHA256、01 Manifest 和写后回读。启用时需要 `pdftoppm`、`pdfinfo`。macOS 已安装 Microsoft PowerPoint 时优先使用 PowerPoint 原生导出；首次运行可能出现 macOS 自动化授权提示。没有 PowerPoint 时使用 LibreOffice；PowerPoint 已存在但原生导出失败时停止，不静默降级。
-- 不在当前范围：OCR、零散图片、音视频、图片向量检索、自动图文对应、自动发布。
+- 当前可选：PDF/PPTX 完整页图、PPT 原生文字、图片页本地 OCR、低置信校对门禁、逐条知识卡证据绑定，以及飞书“校对正文＋高清原页图”的正文/图片数量/尺寸/远端媒体 SHA256 回读。页图需要 `pdftoppm`、`pdfinfo`；本地 OCR Provider 需要 Tesseract 的 `chi_sim` 与 `eng` 语言包。macOS 已安装 Microsoft PowerPoint 时优先使用 PowerPoint 原生导出；首次运行可能出现 macOS 自动化授权提示。没有 PowerPoint 时使用 LibreOffice；PowerPoint 已存在但原生导出失败时停止，不静默降级。
+- 不在当前范围：零散图片入库、音视频、图片向量检索、图片描述、猜测式图文对应、无确认自动发布。
 
 ## 包含的组件
 

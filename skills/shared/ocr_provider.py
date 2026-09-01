@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import os
+import platform
 import shutil
 import subprocess
 import tempfile
@@ -41,7 +43,7 @@ class TesseractOcrProvider:
     name = "tesseract-local"
 
     def __init__(self, executable: str | None = None, languages: str = "chi_sim+eng") -> None:
-        self.executable = executable or shutil.which("tesseract") or ""
+        self.executable = executable or _tesseract_executable() or ""
         self.languages = languages
         if not self.executable:
             raise OcrUnavailable("tesseract executable is unavailable")
@@ -93,3 +95,19 @@ class TesseractOcrProvider:
 
 def default_local_ocr_provider() -> LocalOcrProvider:
     return TesseractOcrProvider()
+
+
+def _tesseract_executable() -> str | None:
+    executable = shutil.which("tesseract")
+    if executable:
+        return executable
+    if platform.system() != "Windows":
+        return None
+    for key in ("ProgramFiles", "ProgramFiles(x86)"):
+        value = os.environ.get(key)
+        if not value:
+            continue
+        candidate = Path(value) / "Tesseract-OCR" / "tesseract.exe"
+        if candidate.is_file():
+            return str(candidate)
+    return None

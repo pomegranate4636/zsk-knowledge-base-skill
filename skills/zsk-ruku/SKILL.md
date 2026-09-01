@@ -21,11 +21,13 @@ PDF/PPTX 默认不生成页图。只有 Router 明确传入 `page_evidence_mode=
 
 - 每个来源在私有临时目录中渲染，结束后自动清理临时文件。
 - 使用 PDF 的真实总页数核对完整页集；页码必须从 1 连续到总页数。
-- `readable.md` frontmatter 持久保存渲染器、总页数、每页文件名和 SHA256。
-- Obsidian 按人类可读来源目录隔离并写入“页面证据/第001页.png”；飞书页附件使用“日期＋标题＋第001页.png”。机器 ID 和哈希只保留在 Manifest。
+- `readable.md` frontmatter 持久保存渲染器、总页数、每页文件名、像素尺寸、页图 SHA256、页文字证据和证据 SHA256。
+- Obsidian 按人类可读来源目录隔离并写入“页面证据/第001页.png”；飞书把高清原页图直接嵌入同一来源 Docx，并用页码与 SHA256 caption 建立稳定对应。机器 ID 和完整 Manifest 不作为客户可见标题。
 - 任一依赖缺失、缺页、重复、错序、写入或回读失败时进入 02，不能报告登记成功。
 
-当前页级证据只保存完整页图，不做 OCR、图片描述、图片检索、自动图文匹配或行业分类。MarkItDown 未实际输出的本地图片占位会被替换为明确说明；完整页模式下再写入真实页证据。PPTX 在 Windows 或 macOS 检测到 Microsoft PowerPoint 时优先走原生 PowerPoint 导出并记录渲染器；否则使用 LibreOffice。原生渲染器已存在但执行失败时停止，不静默降级。
+PPTX 按真实幻灯片顺序提取原生文字；包含图片的页才交给本地 OCR Provider。OCR 原始结果、置信度、校对正文和校对状态共同进入页文字证据；低置信页没有明确校对正文时返回 `ocr_review_required`，不保存为可用正文。OCR 不联网、不调用托管服务，也不做图片描述、图片检索、行业分类或猜测式图文对应。
+
+MarkItDown 未实际输出的本地图片占位会被替换为明确说明；完整页模式下再写入真实页证据。PPTX 在 Windows 或 macOS 检测到 Microsoft PowerPoint 时优先走原生 PowerPoint 导出并记录渲染器；否则使用 LibreOffice。原生渲染器已存在但执行失败时停止，不静默降级。飞书来源 Docx 内必须同时出现页级校对正文和对应高清原页图；写后回读正文、图片数量、尺寸，并下载图片重算 SHA256。
 
 ## 停止条件
 
