@@ -3,20 +3,22 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import io
 import json
 from pathlib import Path, PurePath
 import re
 import tempfile
-from typing import Any
+from typing import Any, Mapping
 
 from .adapter import KnowledgeBaseAdapter
-from .contracts import BINDING_SCHEMA, SOURCE_ROLES, SOURCE_SCHEMA, TASK_ID, BackendObjectRef, Binding, ExceptionRecord, PageArtifact, SourceRecord
+from .contracts import BINDING_SCHEMA, SOURCE_ROLES, SOURCE_SCHEMA, TASK_ID, BackendObjectRef, Binding, ExceptionRecord, PageArtifact, PageTextEvidence, SourceRecord
 from .markdown_converter import ConversionFailed, ConverterUnavailable, MarkdownConversion, convert_to_markdown
 from .naming import human_source_label, page_file_name
 from .page_renderer import PageRenderFailed, PageRendererUnavailable, RenderedPage, render_page_evidence
+from .ocr_provider import LocalOcrProvider, OcrFailed, OcrUnavailable, default_local_ocr_provider
+from .page_text import OcrReviewRequired, PageTextFailed, build_page_text_evidence
 
 
 SUPPORTED_SUFFIXES = frozenset({".md", ".txt", ".csv", ".json", ".html", ".htm", ".docx", ".pptx", ".xlsx", ".pdf"})
@@ -31,6 +33,9 @@ _SAFE_NOTES = {
     "conversion_failed": "资料无法按严格规则转换，未保存原件或正文。",
     "page_evidence_unavailable": "当前电脑缺少可选的完整页证据能力，未保存原件、正文或页图。",
     "page_evidence_failed": "完整页证据生成或校验失败，未报告登记成功。",
+    "ocr_unavailable": "当前电脑缺少本地 OCR Provider，图片页未进入知识库。",
+    "ocr_failed": "本地 OCR 执行失败，图片页未进入知识库。",
+    "ocr_review_required": "存在低置信 OCR 页面，完成校对前不登记正文或知识卡。",
     "permission_denied": "资料处理权未获允许，未保存原件或正文。",
     "ownership_unknown": "资料归属尚未确认，未保存原件或正文。",
     "privacy_approval_required": "检测到敏感信息，尚未取得原件保存授权。",
@@ -60,6 +65,7 @@ class IntakeRequest:
     stable_source_locator: str | None = None
     confirmed_version_of: str | None = None
     page_evidence_mode: str = "off"
+    ocr_corrections: Mapping[int, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not TASK_ID.fullmatch(self.task_id):
@@ -74,6 +80,8 @@ class IntakeRequest:
             raise ValueError("permission_status is unsupported")
         if self.page_evidence_mode not in {"off", "required"}:
             raise ValueError("page_evidence_mode is unsupported")
+        if any(not isinstance(page, int) or page < 1 or not isinstance(text, str) for page, text in self.ocr_corrections.items()):
+            raise ValueError("OCR corrections must map positive page numbers to text")
 
 
 @dataclass(frozen=True)
@@ -89,8 +97,10 @@ class IntakeResponse:
 class Stage5Intake:
     """只登记 01 或写 02；不做业务资产判断。"""
 
-    def __init__(self, adapter: KnowledgeBaseAdapter) -> None:
+    def __init__(self, adapter: KnowledgeBaseAdapter, ocr_provider: LocalOcrProvider | None = None, *, ocr_confidence_threshold: float = 0.85) -> None:
         self.adapter = adapter
+        self.ocr_provider = ocr_provider
+        self.ocr_confidence_threshold = ocr_confidence_threshold
         self._names: dict[tuple[str, str], str] = {}
 
     def execute(self, request: IntakeRequest) -> IntakeResponse:
@@ -159,12 +169,45 @@ class Stage5Intake:
                 "page_sha256": [page.artifact.sha256 for page in rendered_pages],
             }
         page_artifacts = tuple(page.artifact for page in rendered_pages)
+        page_text_evidence: tuple[PageTextEvidence, ...] = ()
+        if page_artifacts:
+            try:
+                provider = self.ocr_provider or default_local_ocr_provider()
+                page_text_evidence = build_page_text_evidence(
+                    source_id,
+                    suffix,
+                    request.payload,
+                    rendered_pages,
+                    provider,
+                    corrections=request.ocr_corrections,
+                    confidence_threshold=self.ocr_confidence_threshold,
+                )
+            except OcrUnavailable:
+                evidence["page_text_evidence"] = {"status": "ocr_unavailable"}
+                return self._exception(request.binding, source_id, "ocr_unavailable", evidence)
+            except OcrFailed:
+                evidence["page_text_evidence"] = {"status": "ocr_failed"}
+                return self._exception(request.binding, source_id, "ocr_failed", evidence)
+            except OcrReviewRequired as exc:
+                evidence["page_text_evidence"] = {"status": "review_required", "page_numbers": list(exc.page_numbers)}
+                return self._exception(request.binding, source_id, "ocr_review_required", evidence)
+            except PageTextFailed:
+                evidence["page_text_evidence"] = {"status": "failed"}
+                return self._exception(request.binding, source_id, "page_evidence_failed", evidence)
+            evidence["page_text_evidence"] = {
+                "status": "verified",
+                "page_count": len(page_text_evidence),
+                "evidence_sha256": [item.evidence_sha256 for item in page_text_evidence],
+            }
         display_name = human_source_label(request.source_title)
+        if page_text_evidence:
+            body = self._with_page_text(body, page_text_evidence)
         if page_artifacts:
             body = self._with_page_evidence(body, page_artifacts, request.binding.backend_type)
         readable = self._document(
             request, source_id, digest, privacy_status, version_of, conversion, body,
             page_artifacts=page_artifacts, page_engine=page_engine, display_name=display_name,
+            page_text_evidence=page_text_evidence,
         )
         record = SourceRecord(
             SOURCE_SCHEMA, source_id, request.binding.client_id, request.source_title.strip(), "unknown",
@@ -175,6 +218,7 @@ class Stage5Intake:
             page_count=len(page_artifacts),
             page_artifacts=page_artifacts,
             display_name=display_name,
+            page_text_evidence=page_text_evidence,
         )
         original = self.adapter.store_original(request.binding, record, request.payload)
         self._event(evidence, "store_original", original.status, original.code)
@@ -260,6 +304,7 @@ class Stage5Intake:
         body: str,
         *,
         page_artifacts: tuple[PageArtifact, ...] = (),
+        page_text_evidence: tuple[PageTextEvidence, ...] = (),
         page_engine: str | None = None,
         display_name: str = "",
     ) -> bytes:
@@ -278,9 +323,26 @@ class Stage5Intake:
             "page_evidence_engine": page_engine,
             "page_count": len(page_artifacts),
             "page_manifest": [item.as_dict() for item in page_artifacts],
+            "page_text_manifest": [item.as_dict() for item in page_text_evidence],
         }
         frontmatter = "\n".join(f"{key}: {json.dumps(value, ensure_ascii=False)}" for key, value in fields.items())
         return f"---\n{frontmatter}\n---\n\n{body}".encode("utf-8")
+
+    @staticmethod
+    def _with_page_text(body: str, pages: tuple[PageTextEvidence, ...]) -> str:
+        sections = ["## 页级校对正文"]
+        for page in pages:
+            sections.extend(
+                (
+                    f"### 第 {page.page_number} 页",
+                    page.verbatim_text or "（本页无可核验文字）",
+                    f"- 文字来源：{page.text_source}",
+                    f"- 校对状态：{page.review_status}",
+                    f"- 置信度：{page.confidence:.6f}",
+                    f"- 证据哈希：`{page.evidence_sha256}`",
+                )
+            )
+        return body.rstrip() + "\n\n" + "\n\n".join(sections) + "\n"
 
     @staticmethod
     def _with_page_evidence(body: str, pages: tuple[PageArtifact, ...], backend_type: str) -> str:

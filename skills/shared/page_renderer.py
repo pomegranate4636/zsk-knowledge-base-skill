@@ -13,6 +13,7 @@ import signal
 import stat
 import subprocess
 import uuid
+import struct
 
 from .contracts import PageArtifact
 
@@ -176,12 +177,15 @@ def render_page_evidence(payload: bytes, suffix: str, source_id: str, work_root:
         if not page_payload.startswith(_PNG_SIGNATURE):
             raise PageRenderFailed("rendered page is not a valid PNG")
         digest = hashlib.sha256(page_payload).hexdigest()
+        width_px, height_px = _png_dimensions(page_payload)
         artifact = PageArtifact(
             page_id=f"{source_id}-PAGE-{number:03d}",
             source_id=source_id,
             page_number=number,
             file_name=f"page-{number:03d}.png",
             sha256=digest,
+            width_px=width_px,
+            height_px=height_px,
         )
         rendered.append(RenderedPage(artifact, page_payload))
     return RenderedPages(tuple(rendered), expected_count, "+".join(engines))
@@ -382,6 +386,15 @@ def _page_number(path: Path) -> int:
     if not match:
         raise PageRenderFailed("rendered page name is invalid")
     return int(match.group(1))
+
+
+def _png_dimensions(payload: bytes) -> tuple[int, int]:
+    if len(payload) < 24 or not payload.startswith(_PNG_SIGNATURE) or payload[12:16] != b"IHDR":
+        raise PageRenderFailed("rendered page PNG has no valid dimensions")
+    width, height = struct.unpack(">II", payload[16:24])
+    if width < 1 or height < 1:
+        raise PageRenderFailed("rendered page PNG dimensions are invalid")
+    return width, height
 
 
 def _find_dependency(name: str) -> str | None:

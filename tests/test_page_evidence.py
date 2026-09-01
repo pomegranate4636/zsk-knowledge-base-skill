@@ -14,11 +14,12 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "skills"))
 
-from shared.contracts import BINDING_SCHEMA, ROOT_KEYS, SOURCE_SCHEMA, Binding, PageArtifact, SourceRecord  # noqa: E402
+from shared.contracts import BINDING_SCHEMA, ROOT_KEYS, SOURCE_SCHEMA, Binding, KnowledgeFact, PageArtifact, SourceRecord  # noqa: E402
 from shared.fake_adapter import FakeAdapter  # noqa: E402
 from shared.feishu_cli import RecordedCliCall, RecordedCliRunner  # noqa: E402
 from shared.feishu_stage5 import FeishuStage5Storage  # noqa: E402
 from shared.markdown_converter import MarkdownConversion  # noqa: E402
+from shared.ocr_provider import OcrResult  # noqa: E402
 from shared.obsidian_adapter import ObsidianAdapter  # noqa: E402
 from shared import page_renderer  # noqa: E402
 from shared.page_renderer import PageRenderFailed, PageRendererUnavailable, RenderedPage, RenderedPages  # noqa: E402
@@ -29,6 +30,13 @@ from shared.templates import TEMPLATE_VERSION  # noqa: E402
 
 TASK_ID = "01a01e29-a6ba-73a2-82e6-4ad1caa0f33b"
 PNG = b"\x89PNG\r\n\x1a\nsynthetic-page"
+
+
+class HighConfidenceOcr:
+    name = "test-local-ocr"
+
+    def recognize(self, _image: bytes) -> OcrResult:
+        return OcrResult("页图文字", 0.99, self.name)
 
 
 def binding(backend: str = "obsidian", locator: str | None = None) -> Binding:
@@ -69,7 +77,7 @@ class PageEvidenceIntakeTests(unittest.TestCase):
     def test_required_pages_are_registered_with_persistent_manifest(self, convert, render) -> None:
         convert.return_value = MarkdownConversion("# PDF\n", "markitdown", "0.1.6")
         render.return_value = rendered()
-        response = Stage5Intake(self.adapter).execute(
+        response = Stage5Intake(self.adapter, HighConfidenceOcr()).execute(
             IntakeRequest(
                 TASK_ID,
                 self.binding,
@@ -127,7 +135,7 @@ class PageEvidenceIntakeTests(unittest.TestCase):
             adapter = ObsidianAdapter()
             adapter.resolve_binding(active_binding)
             adapter.create_skeleton(active_binding)
-            response = Stage5Intake(adapter).execute(
+            response = Stage5Intake(adapter, HighConfidenceOcr()).execute(
                 IntakeRequest(
                     TASK_ID,
                     active_binding,
@@ -147,8 +155,17 @@ class PageEvidenceIntakeTests(unittest.TestCase):
             self.assertEqual(adapter.read_back(active_binding, response.refs).status, "ok")
             fresh_adapter = ObsidianAdapter()
             fresh_adapter.resolve_binding(active_binding)
+            text_evidence = response.record.page_text_evidence[0]
             routed = Stage6Knowledge(fresh_adapter).execute(
-                KnowledgeRequest(TASK_ID, active_binding, response.record, "资料知识", "通用资料", "来源已经完整登记。")
+                KnowledgeRequest(
+                    TASK_ID,
+                    active_binding,
+                    response.record,
+                    "资料知识",
+                    "通用资料",
+                    "来源已经完整登记。",
+                    fact_evidence=(KnowledgeFact("来源已经完整登记。", 1, "页图文字", text_evidence.evidence_sha256),),
+                )
             )
             self.assertEqual((routed.status, routed.code), ("registered", None))
 

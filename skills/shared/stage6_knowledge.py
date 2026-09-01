@@ -6,7 +6,7 @@ import hashlib
 from typing import Any
 
 from .adapter import KnowledgeBaseAdapter
-from .contracts import AssetPayload, Binding, SourceRecord, TASK_ID
+from .contracts import AssetPayload, Binding, KnowledgeFact, SourceRecord, TASK_ID
 
 
 @dataclass(frozen=True)
@@ -19,6 +19,7 @@ class KnowledgeRequest:
     facts: str
     applicability: str = ""
     cautions: str = ""
+    fact_evidence: tuple[KnowledgeFact, ...] = ()
 
     def __post_init__(self) -> None:
         if not TASK_ID.fullmatch(self.task_id):
@@ -27,6 +28,8 @@ class KnowledgeRequest:
             raise ValueError("source must belong to the active binding")
         if not all(isinstance(value, str) and value.strip() for value in (self.title, self.topic, self.facts)):
             raise ValueError("title, topic and facts are required")
+        if any(not isinstance(item, KnowledgeFact) for item in self.fact_evidence):
+            raise ValueError("fact_evidence must contain KnowledgeFact values")
 
 
 @dataclass(frozen=True)
@@ -50,7 +53,7 @@ class Stage6Knowledge:
             evidence["events"].append({"action": action, "status": result.status, "code": result.code})
             if result.status not in {"ok", "reused"} or action == "inspect_structure" and result.status != "reused":
                 return KnowledgeResponse("exception", result.code or "structure_conflict", None, evidence)
-        code = self._source_code(request.source)
+        code = self._source_code(request)
         if code:
             evidence["events"].append({"action": "source_gate", "status": "blocked", "code": code})
             return KnowledgeResponse("exception", code, None, evidence)
@@ -65,7 +68,8 @@ class Stage6Knowledge:
         return KnowledgeResponse(evidence["status"], None, asset, evidence)
 
     @staticmethod
-    def _source_code(source: SourceRecord) -> str | None:
+    def _source_code(request: KnowledgeRequest) -> str | None:
+        source = request.source
         if source.source_role not in {"business_knowledge", "mixed", "unknown"}:
             return "routing_ambiguous"
         if source.status not in {"registered", "reused"}:
@@ -74,6 +78,22 @@ class Stage6Knowledge:
             return "permission_denied"
         if source.privacy_status not in {"passed", "redacted"}:
             return "privacy_blocked"
+        if source.page_evidence_mode == "required":
+            if not source.page_text_evidence or not request.fact_evidence:
+                return "evidence_incomplete"
+            expected_facts = "\n".join(item.fact.strip() for item in request.fact_evidence)
+            if request.facts.strip() != expected_facts:
+                return "evidence_incomplete"
+            evidence_by_page = {item.page_number: item for item in source.page_text_evidence}
+            for fact in request.fact_evidence:
+                page = evidence_by_page.get(fact.page_number)
+                if (
+                    page is None
+                    or page.review_status == "review_required"
+                    or fact.verbatim_text != page.verbatim_text
+                    or fact.evidence_sha256 != page.evidence_sha256
+                ):
+                    return "evidence_incomplete"
         return None
 
     @staticmethod
@@ -82,5 +102,12 @@ class Stage6Knowledge:
         asset_id = "KNO-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
         applicability = request.applicability.strip() or "仅在来源所述场景中使用。"
         cautions = request.cautions.strip() or "不得补充来源未说明的事实或承诺。"
-        body = f"---\nsource_id: \"{request.source.source_id}\"\n---\n\n# {request.title.strip()}\n\n## 主题\n\n{request.topic.strip()}\n\n## 核心知识\n\n{request.facts.strip()}\n\n## 适用范围\n\n{applicability}\n\n## 使用边界\n\n{cautions}\n\n## 来源\n\n- {request.source.source_title}\n"
-        return AssetPayload(asset_id, request.title.strip(), body, request.source.source_id, "business_knowledge", {"topic": request.topic.strip()})
+        if request.fact_evidence:
+            facts = "\n\n".join(
+                f"### {item.fact.strip()}\n\n- 页码：第 {item.page_number} 页\n- 原文：{item.verbatim_text}\n- 证据哈希：`{item.evidence_sha256}`"
+                for item in request.fact_evidence
+            )
+        else:
+            facts = request.facts.strip()
+        body = f"---\nsource_id: \"{request.source.source_id}\"\n---\n\n# {request.title.strip()}\n\n## 主题\n\n{request.topic.strip()}\n\n## 核心知识\n\n{facts}\n\n## 适用范围\n\n{applicability}\n\n## 使用边界\n\n{cautions}\n\n## 来源\n\n- {request.source.source_title}\n"
+        return AssetPayload(asset_id, request.title.strip(), body, request.source.source_id, "business_knowledge", {"topic": request.topic.strip(), "fact_evidence": [item.as_dict() for item in request.fact_evidence]})

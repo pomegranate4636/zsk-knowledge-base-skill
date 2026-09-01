@@ -48,6 +48,10 @@ ERROR_CODES = frozenset(
         "conversion_failed",
         "page_evidence_unavailable",
         "page_evidence_failed",
+        "ocr_unavailable",
+        "ocr_failed",
+        "ocr_review_required",
+        "evidence_incomplete",
         "privacy_blocked",
         "privacy_approval_required",
         "ownership_unknown",
@@ -137,6 +141,8 @@ class PageArtifact:
     page_number: int
     file_name: str
     sha256: str
+    width_px: int = 0
+    height_px: int = 0
 
     def __post_init__(self) -> None:
         _non_empty(self.page_id, "page_id")
@@ -150,6 +156,10 @@ class PageArtifact:
             raise ContractError("source_unreadable", "page file name must match its page number")
         if not HEX64.fullmatch(self.sha256):
             raise ContractError("source_unreadable", "page sha256 must be a SHA256")
+        if self.width_px < 0 or self.height_px < 0:
+            raise ContractError("source_unreadable", "page dimensions cannot be negative")
+        if bool(self.width_px) != bool(self.height_px):
+            raise ContractError("source_unreadable", "page dimensions must be both present or both absent")
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -158,6 +168,156 @@ class PageArtifact:
             "page_number": self.page_number,
             "file_name": self.file_name,
             "sha256": self.sha256,
+            "width_px": self.width_px,
+            "height_px": self.height_px,
+        }
+
+
+@dataclass(frozen=True)
+class PageTextEvidence:
+    """页图、原生文字、OCR 与校对结果组成的内容寻址证据。"""
+
+    source_id: str
+    page_number: int
+    page_sha256: str
+    native_text: str
+    ocr_text: str
+    verbatim_text: str
+    text_source: str
+    confidence: float
+    review_status: str
+    evidence_sha256: str
+
+    def __post_init__(self) -> None:
+        if not SOURCE_ID.fullmatch(self.source_id) or self.page_number < 1:
+            raise ContractError("source_unreadable", "page text identity is invalid")
+        if not HEX64.fullmatch(self.page_sha256) or not HEX64.fullmatch(self.evidence_sha256):
+            raise ContractError("source_unreadable", "page text hashes must be SHA256")
+        if self.text_source not in {"native", "ocr", "native+ocr", "none"}:
+            raise ContractError("source_unreadable", "page text source is invalid")
+        if self.review_status not in {"verified_native", "auto_verified", "approved", "review_required"}:
+            raise ContractError("source_unreadable", "page text review status is invalid")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ContractError("source_unreadable", "page text confidence must be between zero and one")
+        expected = self._digest(
+            self.source_id,
+            self.page_number,
+            self.page_sha256,
+            self.native_text,
+            self.ocr_text,
+            self.verbatim_text,
+            self.text_source,
+            self.confidence,
+            self.review_status,
+        )
+        if self.evidence_sha256 != expected:
+            raise ContractError("source_unreadable", "page text evidence hash does not match its content")
+        if self.review_status == "review_required" and self.verbatim_text:
+            raise ContractError("ocr_review_required", "unreviewed OCR cannot expose verified verbatim text")
+
+    @classmethod
+    def create(
+        cls,
+        source_id: str,
+        page_number: int,
+        page_sha256: str,
+        *,
+        native_text: str,
+        ocr_text: str,
+        verbatim_text: str,
+        text_source: str,
+        confidence: float,
+        review_status: str,
+    ) -> "PageTextEvidence":
+        confidence = round(float(confidence), 6)
+        digest = cls._digest(
+            source_id,
+            page_number,
+            page_sha256,
+            native_text,
+            ocr_text,
+            verbatim_text,
+            text_source,
+            confidence,
+            review_status,
+        )
+        return cls(
+            source_id,
+            page_number,
+            page_sha256,
+            native_text,
+            ocr_text,
+            verbatim_text,
+            text_source,
+            confidence,
+            review_status,
+            digest,
+        )
+
+    @staticmethod
+    def _digest(
+        source_id: str,
+        page_number: int,
+        page_sha256: str,
+        native_text: str,
+        ocr_text: str,
+        verbatim_text: str,
+        text_source: str,
+        confidence: float,
+        review_status: str,
+    ) -> str:
+        import json
+
+        material = {
+            "source_id": source_id,
+            "page_number": page_number,
+            "page_sha256": page_sha256,
+            "native_text": native_text,
+            "ocr_text": ocr_text,
+            "verbatim_text": verbatim_text,
+            "text_source": text_source,
+            "confidence": confidence,
+            "review_status": review_status,
+        }
+        canonical = json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "source_id": self.source_id,
+            "page_number": self.page_number,
+            "page_sha256": self.page_sha256,
+            "native_text": self.native_text,
+            "ocr_text": self.ocr_text,
+            "verbatim_text": self.verbatim_text,
+            "text_source": self.text_source,
+            "confidence": self.confidence,
+            "review_status": self.review_status,
+            "evidence_sha256": self.evidence_sha256,
+        }
+
+
+@dataclass(frozen=True)
+class KnowledgeFact:
+    """知识卡中的一条事实及其逐页原文证据。"""
+
+    fact: str
+    page_number: int
+    verbatim_text: str
+    evidence_sha256: str
+
+    def __post_init__(self) -> None:
+        _non_empty(self.fact, "fact")
+        _non_empty(self.verbatim_text, "verbatim_text")
+        if self.page_number < 1 or not HEX64.fullmatch(self.evidence_sha256):
+            raise ContractError("evidence_incomplete", "knowledge fact page or evidence hash is invalid")
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "fact": self.fact,
+            "page_number": self.page_number,
+            "verbatim_text": self.verbatim_text,
+            "evidence_sha256": self.evidence_sha256,
         }
 
 
@@ -326,6 +486,7 @@ class SourceRecord:
     page_count: int = 0
     page_artifacts: tuple[PageArtifact, ...] = ()
     display_name: str = ""
+    page_text_evidence: tuple[PageTextEvidence, ...] = ()
 
     def __post_init__(self) -> None:
         validate_source(self)
@@ -351,6 +512,7 @@ class SourceRecord:
             "page_count": self.page_count,
             "page_artifacts": [item.as_dict() for item in self.page_artifacts],
             "display_name": self.display_name,
+            "page_text_evidence": [item.as_dict() for item in self.page_text_evidence],
         }
 
 
@@ -393,11 +555,25 @@ def validate_source(source: SourceRecord) -> None:
     if any(not isinstance(item, PageArtifact) or item.source_id != source.source_id for item in source.page_artifacts):
         raise ContractError("source_unreadable", "page artifacts must belong to the source")
     pages = [item.page_number for item in source.page_artifacts]
+    if any(
+        not isinstance(item, PageTextEvidence) or item.source_id != source.source_id
+        for item in source.page_text_evidence
+    ):
+        raise ContractError("source_unreadable", "page text evidence must belong to the source")
+    text_pages = [item.page_number for item in source.page_text_evidence]
     if source.page_evidence_mode == "off":
         if source.page_count != 0 or source.page_artifacts:
             raise ContractError("source_unreadable", "page evidence must be empty when disabled")
+        if source.page_text_evidence:
+            raise ContractError("source_unreadable", "page text evidence must be empty when page mode is disabled")
     elif source.page_count < 1 or pages != list(range(1, source.page_count + 1)):
         raise ContractError("page_evidence_failed", "page evidence must be complete, ordered, and contiguous")
+    elif source.page_text_evidence:
+        if text_pages != pages:
+            raise ContractError("evidence_incomplete", "page text evidence must be complete, ordered, and contiguous")
+        by_page = {item.page_number: item for item in source.page_artifacts}
+        if any(item.page_sha256 != by_page[item.page_number].sha256 for item in source.page_text_evidence):
+            raise ContractError("evidence_incomplete", "page text evidence must bind the rendered page hash")
 
 
 @dataclass(frozen=True)

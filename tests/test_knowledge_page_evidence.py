@@ -18,7 +18,7 @@ from shared.contracts import (  # noqa: E402
     PageTextEvidence,
     SourceRecord,
 )
-from shared.fake_adapter import FakeKnowledgeBaseAdapter  # noqa: E402
+from shared.fake_adapter import FakeAdapter  # noqa: E402
 from shared.stage6_knowledge import KnowledgeRequest, Stage6Knowledge  # noqa: E402
 
 
@@ -71,7 +71,7 @@ def source() -> SourceRecord:
 class KnowledgePageEvidenceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.binding = binding()
-        self.adapter = FakeKnowledgeBaseAdapter()
+        self.adapter = FakeAdapter()
         self.adapter.resolve_binding(self.binding)
         self.adapter.create_skeleton(self.binding)
         src = source()
