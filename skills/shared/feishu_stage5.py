@@ -2,6 +2,8 @@
 from __future__ import annotations
 import hashlib
 import json
+import re
+import xml.etree.ElementTree as ET
 from typing import Any, Mapping, Sequence
 from .contracts import AdapterResult, BackendObjectRef, ExceptionRecord, PageArtifact, SourceRecord
 from .feishu_cli import CliResponse, CliRunner
@@ -68,34 +70,68 @@ class FeishuStage5Storage:
             return AdapterResult.failed("binding_conflict", "Page evidence does not belong to the source.", blocked=True)
         if hashlib.sha256(payload).hexdigest() != page.sha256:
             return AdapterResult.failed("source_unreadable", "Page payload hash does not match its manifest.", blocked=True)
+        if page.width_px < 1 or page.height_px < 1:
+            return AdapterResult.failed("source_unreadable", "Page dimensions are required for Feishu media verification.", blocked=True)
         key = f"{source.source_id}:page:{page.page_number:03d}"
-        replay = self._replay(key, payload)
-        if replay:
-            return replay
-        name = f"{safe_title(source.display_name or source.source_title)}-{page_file_name(page.page_number)}"
-        node, failure = self._find(self.root_nodes["01"], name, "file")
+        registered, failure = self._find_source_document(source.source_id)
         if failure:
             return failure
-        if node:
-            ref = self._ref(key, "source_page", payload, f"feishu://01/pages/{page.page_number:03d}")
-            self._stored[key] = (page.sha256, ref)
-            return AdapterResult.reused(ref, checked=("remote_page_present", "human_readable_name", "stable_file_token"))
-        argv = (
-            "lark-cli", "--as", "user", "drive", "+upload", "--file", "{file}",
-            "--wiki-token", self.root_nodes["01"], "--name", name, "--format", "json",
-        )
-        data, failure = self._response(self.runner.upload(argv, payload=payload, name=name), "write_failed")
-        if failure:
-            return failure
-        token = data.get("file_token") or data.get("token")
+        if registered is None:
+            return AdapterResult.failed("ownership_unknown", "Readable source document is missing before page media insert.", blocked=True)
+        readable_node, _content = registered
+        token = readable_node.get("obj_token")
         if not isinstance(token, str) or not token:
-            return AdapterResult.failed("readback_failed", "Uploaded page has no stable token.", blocked=True)
-        listed, list_failure = self._find(self.root_nodes["01"], name, "file")
-        if list_failure or not listed:
-            return list_failure or AdapterResult.failed("readback_failed", "Uploaded page cannot be read back by its human-readable name.", blocked=True)
+            return AdapterResult.failed("readback_failed", "Readable source document has no stable token.", blocked=True)
+        before, failure = self._fetch_full_document(token)
+        if failure:
+            return failure
+        caption = f"第 {page.page_number} 页｜SHA256 {page.sha256}"
+        existing = self._matching_media(before, caption)
+        inserted_token: str | None = None
+        created = False
+        if not existing:
+            argv = (
+                "lark-cli", "--as", "user", "docs", "+media-insert", "--doc", token,
+                "--file", "{file}", "--width", str(page.width_px), "--height", str(page.height_px),
+                "--align", "center", "--caption", caption, "--format", "json",
+            )
+            name = page.file_name
+            data, failure = self._response(self.runner.upload(argv, payload=payload, name=name), "write_failed")
+            if failure:
+                return failure
+            inserted_token = data.get("file_token") or data.get("token")
+            if not isinstance(inserted_token, str) or not inserted_token:
+                return AdapterResult.failed("readback_failed", "Inserted page media has no stable token.", blocked=True)
+            created = True
+        after, failure = self._fetch_full_document(token)
+        if failure:
+            return failure
+        matches = self._matching_media(after, caption, inserted_token)
+        source_images = self._source_evidence_media(after)
+        if len(matches) != 1 or len(source_images) != page.page_number:
+            return AdapterResult.failed("readback_failed", "Source page image count or identity failed readback.", blocked=True)
+        media = matches[0]
+        if media["width_px"] != page.width_px or media["height_px"] != page.height_px:
+            return AdapterResult.failed("readback_failed", "Source page image dimensions failed readback.", blocked=True)
+        media_token = media["token"]
+        download = (
+            "lark-cli", "--as", "user", "docs", "+media-download", "--token", media_token,
+            "--output", "{output}", "--format", "json",
+        )
+        response, remote_payload = self.runner.download(download, name=page.file_name)
+        _downloaded, failure = self._response(response, "readback_failed")
+        if failure:
+            return failure
+        if hashlib.sha256(remote_payload).hexdigest() != page.sha256:
+            return AdapterResult.failed("readback_failed", "Downloaded page media hash differs from the approved page.", blocked=True)
         ref = self._ref(key, "source_page", payload, f"feishu://01/pages/{page.page_number:03d}")
         self._stored[key] = (page.sha256, ref)
-        return AdapterResult.ok(ref, checked=("drive_page_uploaded", "human_readable_name", "stable_file_token", "list_readback"))
+        factory = AdapterResult.ok if created else AdapterResult.reused
+        return factory(
+            ref,
+            checked=("source_doc_media_inserted", "document_full_readback", "image_count_readback", "image_dimensions_readback", "media_sha256_readback"),
+            metadata={"image_count": len(source_images), "width_px": page.width_px, "height_px": page.height_px, "sha256": page.sha256},
+        )
     def write_exception(self, exception: ExceptionRecord) -> AdapterResult:
         payload = (f"原因码：`{exception.reason_code}`\n\n{exception.safe_note}\n\n待确认：{exception.question}\n").encode("utf-8")
         return self._store_doc(f"exception:{exception.exception_id}", exception.exception_id, self.root_nodes["02"], payload, "exception", "feishu://02")
@@ -158,6 +194,64 @@ class FeishuStage5Storage:
         if len(matches) > 1:
             return None, AdapterResult.failed("duplicate_conflict", "More than one readable source has the same source identity.", blocked=True)
         return (matches[0] if matches else None), None
+
+    def _fetch_full_document(self, token: str) -> tuple[dict[str, Any], AdapterResult | None]:
+        argv = (
+            "lark-cli", "--as", "user", "docs", "+fetch", "--api-version", "v2", "--doc", token,
+            "--doc-format", "xml", "--detail", "full", "--format", "json",
+        )
+        data, failure = self._response(self.runner.run(argv), "readback_failed")
+        if failure:
+            return {}, failure
+        document = data.get("document") if isinstance(data.get("document"), dict) else None
+        if document is None or not isinstance(document.get("content"), str):
+            return {}, AdapterResult.failed("readback_failed", "Full source document content is unavailable.", blocked=True)
+        return document, None
+
+    @staticmethod
+    def _document_media(document: Mapping[str, Any]) -> list[dict[str, Any]]:
+        content = str(document.get("content", ""))
+        try:
+            root = ET.fromstring(f"<zsk-root>{content}</zsk-root>")
+        except ET.ParseError:
+            return []
+        reference_map = document.get("reference_map") if isinstance(document.get("reference_map"), dict) else {}
+        media: list[dict[str, Any]] = []
+        for element in root.iter():
+            if element.tag.rsplit("}", 1)[-1] != "img":
+                continue
+            attributes: dict[str, Any] = dict(element.attrib)
+            ref = attributes.get("ref")
+            if isinstance(ref, str):
+                for group in reference_map.values():
+                    if isinstance(group, dict) and isinstance(group.get(ref), dict):
+                        attributes.update(group[ref])
+            token = attributes.get("token") or attributes.get("file_token")
+            try:
+                width = int(attributes.get("width") or attributes.get("width_px") or 0)
+                height = int(attributes.get("height") or attributes.get("height_px") or 0)
+            except (TypeError, ValueError):
+                width = height = 0
+            if isinstance(token, str) and token:
+                media.append({
+                    "token": token,
+                    "width_px": width,
+                    "height_px": height,
+                    "caption": str(attributes.get("caption") or ""),
+                })
+        return media
+
+    @classmethod
+    def _source_evidence_media(cls, document: Mapping[str, Any]) -> list[dict[str, Any]]:
+        marker = re.compile(r"^第 \d+ 页｜SHA256 [0-9a-f]{64}$")
+        return [item for item in cls._document_media(document) if marker.fullmatch(item["caption"])]
+
+    @classmethod
+    def _matching_media(cls, document: Mapping[str, Any], caption: str, token: str | None = None) -> list[dict[str, Any]]:
+        return [
+            item for item in cls._document_media(document)
+            if item["caption"] == caption and (token is None or item["token"] == token)
+        ]
 
     @staticmethod
     def _frontmatter_value(content: str, key: str) -> object:
@@ -229,7 +323,10 @@ class FeishuStage5Storage:
         title_prefixes = (f"# {title}\n", f"<title>{title}</title>\n")
         if not content.rstrip().startswith(title_prefixes):
             return False
-        return content.count(f"`{digest}`") == 2 if wrapped else content.rstrip().endswith(payload.decode("utf-8").rstrip())
+        expected_body = payload.decode("utf-8").rstrip()
+        if not wrapped:
+            return content.rstrip().endswith(expected_body)
+        return content.count(f"`{digest}`") == 2 and expected_body in content
 
     def _replay(self, key: str, payload: bytes) -> AdapterResult | None:
         existing = self._stored.get(key)

@@ -23,6 +23,8 @@ class CliRunner(Protocol):
 
     def upload(self, argv: Sequence[str], *, payload: bytes, name: str) -> CliResponse: ...
 
+    def download(self, argv: Sequence[str], *, name: str) -> tuple[CliResponse, bytes]: ...
+
 
 class SubprocessCliRunner:
     """以参数数组调用 CLI，绝不经由 shell。"""
@@ -83,6 +85,23 @@ class SubprocessCliRunner:
             relative_path = f"./{safe_name}"
             return self._run(tuple(relative_path if part == "{file}" else part for part in argv), cwd=directory)
 
+    def download(self, argv: Sequence[str], *, name: str) -> tuple[CliResponse, bytes]:
+        safe_name = Path(name).name
+        if safe_name != name or not safe_name:
+            return CliResponse(2, "", "unsafe download name"), b""
+        with tempfile.TemporaryDirectory(prefix="zsk-download-") as directory:
+            relative_path = f"./{safe_name}"
+            response = self._run(
+                tuple(relative_path if part == "{output}" else part for part in argv), cwd=directory
+            )
+            path = Path(directory) / safe_name
+            if response.returncode != 0 or not path.is_file():
+                return response, b""
+            try:
+                return response, path.read_bytes()
+            except OSError:
+                return CliResponse(1, response.stdout, "downloaded media cannot be read"), b""
+
 
 @dataclass(frozen=True)
 class RecordedCliCall:
@@ -95,6 +114,8 @@ class RecordedCliCall:
     stdin: str | None = None
     payload: bytes | None = None
     upload_name: str | None = None
+    download_payload: bytes | None = None
+    download_name: str | None = None
 
 
 class RecordedCliRunner:
@@ -130,3 +151,14 @@ class RecordedCliRunner:
         if actual != expected.argv or payload != expected.payload or name != expected.upload_name:
             return CliResponse(2, "", "unexpected lark-cli upload arguments")
         return CliResponse(expected.returncode, expected.stdout, expected.stderr)
+
+    def download(self, argv: Sequence[str], *, name: str) -> tuple[CliResponse, bytes]:
+        actual = tuple(argv)
+        self.calls.append(actual)
+        if self._cursor >= len(self._calls):
+            return CliResponse(2, "", "unexpected lark-cli download"), b""
+        expected = self._calls[self._cursor]
+        self._cursor += 1
+        if actual != expected.argv or name != expected.download_name:
+            return CliResponse(2, "", "unexpected lark-cli download arguments"), b""
+        return CliResponse(expected.returncode, expected.stdout, expected.stderr), expected.download_payload or b""
