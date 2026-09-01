@@ -68,6 +68,24 @@ class InstallDoctorTests(unittest.TestCase):
         self.assertTrue(status["pptx"])
         self.assertEqual(status["pptx_engine"], "Microsoft PowerPoint")
 
+    def test_doctor_prefers_native_powerpoint_on_windows(self) -> None:
+        with mock.patch.object(install, "_windows_powerpoint_ready", return_value=True, create=True):
+            with mock.patch.object(install, "_mac_powerpoint_ready", return_value=False):
+                with mock.patch.object(install, "_optional_binary_ready", return_value=True):
+                    status = install.page_evidence_status()
+        self.assertTrue(status["pptx"])
+        self.assertEqual(status["pptx_engine"], "Microsoft PowerPoint")
+
+    @mock.patch.object(install.platform, "system", return_value="Windows")
+    @mock.patch.object(install.shutil, "which", return_value="powershell.exe")
+    @mock.patch.object(
+        install.subprocess,
+        "run",
+        return_value=install.subprocess.CompletedProcess(("powershell.exe",), 0, "", ""),
+    )
+    def test_windows_powerpoint_detection_uses_registered_com(self, _run, _which, _system) -> None:
+        self.assertTrue(install._windows_powerpoint_ready())
+
 
 if __name__ == "__main__":
     unittest.main()
