@@ -85,6 +85,11 @@ class MarkdownIntakeTests(unittest.TestCase):
         self.assertIn(embedded, converted)
         self.assertIn(remote, converted)
 
+    def test_invalid_base64_data_image_becomes_honest_note(self) -> None:
+        converted = remove_unpersisted_local_images("![坏图](data:image/png;base64,A)\n")
+        self.assertNotIn("data:image", converted)
+        self.assertIn("原文图片未在轻量文字模式中保存（坏图）", converted)
+
     def test_one_neutral_source_can_feed_03_and_04_without_folder_question(self) -> None:
         response = self.intake.execute(
             IntakeRequest(TASK_ID, self.binding, "方案.md", "# 客户服务\n\n先说明边界，再给步骤。\n".encode(), "客户服务方案")

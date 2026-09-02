@@ -106,6 +106,9 @@ class Stage5Intake:
             return self._exception(request.binding, source_id, code, evidence)
         if suffix not in SUPPORTED_SUFFIXES:
             return self._exception(request.binding, source_id, "format_unsupported", evidence)
+        if request.page_evidence_mode == "required" and not request.original_retention_approved:
+            evidence["page_evidence"] = {"mode": "required", "status": "approval_required"}
+            return self._exception(request.binding, source_id, "privacy_approval_required", evidence)
         existing = self._reuse_existing_source(request, source_id, digest, evidence)
         if existing is not None:
             return existing
@@ -123,9 +126,6 @@ class Stage5Intake:
         sensitive_count = sum(len(pattern.findall(body)) for pattern in _SENSITIVE)
         evidence["privacy"] = {"sensitive_match_count": sensitive_count, "original_retention_approved": request.original_retention_approved}
         if sensitive_count and not request.original_retention_approved:
-            return self._exception(request.binding, source_id, "privacy_approval_required", evidence)
-        if request.page_evidence_mode == "required" and not request.original_retention_approved:
-            evidence["page_evidence"] = {"mode": "required", "status": "approval_required"}
             return self._exception(request.binding, source_id, "privacy_approval_required", evidence)
         name_key = (request.binding.client_id, request.file_name.casefold())
         prior_source = self._names.get(name_key)
@@ -214,11 +214,20 @@ class Stage5Intake:
         lookup = getattr(self.adapter, "reuse_existing_source", None)
         if not callable(lookup):
             return None
-        result = lookup(request.binding, source_id, digest, request.source_role)
+        result = lookup(
+            request.binding,
+            source_id,
+            digest,
+            request.source_role,
+            request.page_evidence_mode,
+        )
         if result is None:
             return None
         self._event(evidence, "reuse_existing_source", result.status, result.code)
         if result.status not in {"ok", "reused"}:
+            if result.code == "binding_conflict":
+                evidence.update({"status": "exception", "code": "binding_conflict", "output_ref_ids": []})
+                return IntakeResponse("exception", "binding_conflict", source_id, (), None, evidence)
             return self._exception(request.binding, source_id, result.code or "readback_failed", evidence, result.object_refs)
         source = result.metadata.get("source_record")
         if not isinstance(source, SourceRecord):
@@ -296,6 +305,7 @@ class Stage5Intake:
         suffix = PurePath(request.file_name).suffix.lower()
         unit_kind, unit_count = Stage5Intake._content_units(suffix, body)
         fields = {
+            "client_id": request.binding.client_id,
             "source_id": source_id, "source_title": request.source_title.strip(),
             "display_name": display_name,
             "original_file_name": request.file_name, "source_format": suffix.removeprefix("."),

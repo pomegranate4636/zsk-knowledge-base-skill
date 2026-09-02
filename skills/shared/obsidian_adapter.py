@@ -9,7 +9,7 @@ from pathlib import Path, PurePath
 import stat
 from typing import Sequence
 
-from .contracts import AdapterResult, AssetPayload, BackendObjectRef, Binding, ExceptionRecord, PageArtifact, SourceRecord, ROOT_KEYS
+from .contracts import AdapterResult, AssetPayload, BackendObjectRef, Binding, ContractError, ExceptionRecord, PageArtifact, SourceRecord, ROOT_KEYS
 from .naming import find_obsidian_source_dir, page_file_name, source_original_name, source_readable_name, unique_source_dir
 from .obsidian_stage6 import ObsidianStage6Storage
 from .templates import ROOT_TITLES, root_content, root_object_kind, template_fingerprint
@@ -126,7 +126,14 @@ class ObsidianAdapter:
     def store_readable(self, binding: Binding, source: SourceRecord, payload: bytes) -> AdapterResult:
         return self._store_source(binding, source, payload, "readable")
 
-    def reuse_existing_source(self, binding: Binding, source_id: str, original_sha256: str, requested_role: str) -> AdapterResult | None:
+    def reuse_existing_source(
+        self,
+        binding: Binding,
+        source_id: str,
+        original_sha256: str,
+        requested_role: str,
+        requested_page_evidence_mode: str,
+    ) -> AdapterResult | None:
         """回读已登记的同 SHA 来源，兼容旧 SRC 目录和新版中文目录。"""
         guard = self._write_guard(binding)
         if guard:
@@ -136,7 +143,16 @@ class ObsidianAdapter:
         if source_dir is None:
             return None
         try:
-            record, refs = self._existing_source_record(binding, source_dir, source_id, original_sha256, requested_role)
+            record, refs = self._existing_source_record(
+                binding,
+                source_dir,
+                source_id,
+                original_sha256,
+                requested_role,
+                requested_page_evidence_mode,
+            )
+        except ContractError as exc:
+            return AdapterResult.failed(exc.code, exc.detail, blocked=True)
         except ValueError as exc:
             return AdapterResult.failed("readback_failed", str(exc), blocked=True)
         for ref, path in refs:
@@ -174,7 +190,11 @@ class ObsidianAdapter:
         name = page_file_name(page.page_number)
         path = page_dir / name
         result = self._store_bytes(
-            path, payload, page.page_id, "source_page", "obsidian://01/页面证据"
+            path,
+            payload,
+            page.page_id,
+            "source_page",
+            f"obsidian://01/{source_dir.name}/页面证据",
         )
         if result.status in {"ok", "reused"}:
             for ref in result.object_refs:
@@ -371,6 +391,7 @@ class ObsidianAdapter:
         source_id: str,
         original_sha256: str,
         requested_role: str,
+        requested_page_evidence_mode: str,
     ) -> tuple[SourceRecord, tuple[tuple[BackendObjectRef, Path], ...]]:
         readable_candidates = tuple(
             path for path in source_dir.iterdir()
@@ -384,6 +405,8 @@ class ObsidianAdapter:
         meta = self._frontmatter(readable)
         if meta.get("source_id") != source_id or meta.get("original_sha256") != original_sha256:
             raise ValueError("Registered source metadata does not match this original.")
+        if meta.get("client_id") != binding.client_id:
+            raise ContractError("binding_conflict", "Registered source belongs to another or unknown client binding.")
         original_name = meta.get("original_file_name")
         source_title = meta.get("source_title")
         if not isinstance(original_name, str) or not original_name or not isinstance(source_title, str) or not source_title:
@@ -402,9 +425,11 @@ class ObsidianAdapter:
         if source_role not in {"business_knowledge", "reference_method", "profile_material", "mixed", "unknown"}:
             raise ValueError("Registered source role is invalid.")
         if requested_role not in {"unknown", "mixed", source_role} and source_role not in {"unknown", "mixed"}:
-            raise ValueError("Registered source role conflicts with this request.")
+            raise ContractError("duplicate_conflict", "Registered source role conflicts with this request.")
         page_mode = meta.get("page_evidence_mode") if isinstance(meta.get("page_evidence_mode"), str) else "off"
         page_count = meta.get("page_count") if isinstance(meta.get("page_count"), int) else 0
+        if requested_page_evidence_mode == "required" and page_mode != "required":
+            raise ContractError("page_evidence_failed", "Registered source has no complete page evidence.")
         page_artifacts: tuple[PageArtifact, ...] = ()
         page_refs: list[tuple[BackendObjectRef, Path]] = []
         if page_mode == "required":
@@ -433,6 +458,8 @@ class ObsidianAdapter:
             raise ValueError("Registered page evidence mode is invalid.")
         privacy = meta.get("privacy_status") if isinstance(meta.get("privacy_status"), str) else "passed"
         permission = meta.get("permission_status") if isinstance(meta.get("permission_status"), str) else "allowed"
+        if privacy not in {"passed", "redacted"} or permission != "allowed":
+            raise ValueError("Registered source approval metadata is invalid.")
         version_of = meta.get("version_of") if isinstance(meta.get("version_of"), str) else None
         retained = meta.get("original_retention_approved")
         if not isinstance(retained, bool):
@@ -481,7 +508,8 @@ class ObsidianAdapter:
     @staticmethod
     def _existing_ref(object_id: str, object_kind: str, source_dir: Path, path: Path) -> BackendObjectRef:
         digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
-        return BackendObjectRef(f"obsidian-{object_id}", object_kind, f"obsidian://01/{source_dir.name}/{path.name}", digest)
+        relative = path.relative_to(source_dir).as_posix()
+        return BackendObjectRef(f"obsidian-{object_id}", object_kind, f"obsidian://01/{source_dir.name}/{relative}", digest)
 
     @staticmethod
     def _store_bytes(path: Path, payload: bytes, object_key: str, object_kind: str, locator_root: str) -> AdapterResult:
