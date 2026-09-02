@@ -179,6 +179,21 @@ class PageTextEvidenceTests(unittest.TestCase):
         result = AutoOcrProvider((FakeOcr(0.99), DifferentOcr(0.99))).recognize(PNG_1)
         self.assertEqual(result.confidence, 0.0)
 
+    def test_automatic_ocr_accepts_high_confidence_text_with_partial_local_corroboration(self) -> None:
+        class CorroboratingOcr(FakeOcr):
+            def recognize(self, image: bytes) -> OcrResult:
+                self.calls.append(image)
+                return OcrResult("上海 翠湖 天地 高端 住宅 项目 资料", self.confidence, self.name)
+
+        class PrimaryOcr(FakeOcr):
+            def recognize(self, image: bytes) -> OcrResult:
+                self.calls.append(image)
+                return OcrResult("上海翠湖天地高端住宅", self.confidence, self.name)
+
+        result = AutoOcrProvider((PrimaryOcr(0.91), CorroboratingOcr(0.72))).recognize(PNG_1)
+        self.assertEqual(result.text, "上海翠湖天地高端住宅")
+        self.assertEqual(result.confidence, 0.91)
+
     def test_reviewed_correction_is_hashed_with_page_image(self) -> None:
         evidence = build_page_text_evidence(
             SOURCE_ID,

@@ -14,11 +14,11 @@
 
 | 阶段 | RED 证据 | GREEN 证据 | 检查点 |
 | --- | --- | --- | --- |
-| 自动质量 Gate | 新测试导入 `AutoOcrProvider` 失败；默认原件保留断言失败；低置信页仍返回旧的 `privacy_approval_required`/校对路径。 | `py -X utf8 -m unittest tests.test_page_text_evidence tests.test_page_evidence`：30 项通过。 | RED `69acf9e`; GREEN `fix: enforce automatic OCR quality gate`（本提交） |
+| 自动质量 Gate | 新测试导入 `AutoOcrProvider` 失败；默认原件保留断言失败；低置信页仍返回旧的 `privacy_approval_required`/校对路径。 | `py -X utf8 -m unittest tests.test_page_text_evidence tests.test_page_evidence`：31 项通过。 | RED `69acf9e`; GREEN `fix: enforce automatic OCR quality gate`（本提交） |
 
 ## 实现与验证
 
-- `AutoOcrProvider` 使用 Tesseract 的 3、6、11 三种页面分割模式；只有两次结果的规范化文字相似度达到 0.92，才保留较低一次的置信度作为自动验证结果。
+- `AutoOcrProvider` 使用 Tesseract 的 3、6、11 三种页面分割模式；优先要求两次结果的规范化文字相似度达到 0.92。版式差异导致这一条件不成立时，只有主结果置信度至少 0.85、且另一结果相似度至少 0.65 才自动接受主结果；无印证结果仍返回零置信度。
 - 完整页模式以 300 DPI 渲染；低质量页不再请求或接受客户校对。阶段 5 在任何后端写入之前返回 `file_quality_insufficient`。
 - `py -X utf8 -m compileall -q skills` 通过。
 - `git diff --check` 通过。

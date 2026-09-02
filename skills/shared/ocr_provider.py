@@ -123,13 +123,17 @@ class AutoOcrProvider:
         providers: Sequence[LocalOcrProvider] | None = None,
         *,
         agreement_threshold: float = 0.92,
+        fallback_confidence_threshold: float = 0.85,
+        fallback_agreement_threshold: float = 0.65,
     ) -> None:
-        if not 0.0 <= agreement_threshold <= 1.0:
+        if not all(0.0 <= threshold <= 1.0 for threshold in (agreement_threshold, fallback_confidence_threshold, fallback_agreement_threshold)):
             raise ValueError("OCR agreement threshold is invalid")
         self.providers = tuple(providers or tuple(TesseractOcrProvider(page_segmentation_mode=mode) for mode in (3, 6, 11)))
         if len(self.providers) < 2:
             raise ValueError("automatic OCR requires at least two local passes")
         self.agreement_threshold = agreement_threshold
+        self.fallback_confidence_threshold = fallback_confidence_threshold
+        self.fallback_agreement_threshold = fallback_agreement_threshold
 
     def recognize(self, image: bytes) -> OcrResult:
         candidates: list[OcrResult] = []
@@ -154,6 +158,16 @@ class AutoOcrProvider:
                     best_pair = (first, second)
                     best_score = score
         if best_pair is None:
+            primary = ranked[0]
+            corroboration = max(
+                (_text_agreement(primary.text, candidate.text) for candidate in ranked[1:]),
+                default=0.0,
+            )
+            if (
+                primary.confidence >= self.fallback_confidence_threshold
+                and corroboration >= self.fallback_agreement_threshold
+            ):
+                return OcrResult(primary.text, primary.confidence, self.name)
             return OcrResult(ranked[0].text, 0.0, self.name)
         first, second = best_pair
         chosen = first if first.confidence >= second.confidence else second
