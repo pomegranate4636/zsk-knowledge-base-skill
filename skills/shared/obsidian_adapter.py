@@ -10,6 +10,11 @@ import stat
 from typing import Sequence
 
 from .contracts import AdapterResult, AssetPayload, BackendObjectRef, Binding, ContractError, ExceptionRecord, PageArtifact, SourceRecord, ROOT_KEYS
+from .content_source_contract import (
+    ContentSourceContractError,
+    preflight_obsidian_profile_index,
+    sync_obsidian_profile_index,
+)
 from .naming import find_obsidian_source_dir, page_file_name, source_original_name, source_readable_name, unique_source_dir
 from .obsidian_stage6 import ObsidianStage6Storage
 from .templates import ROOT_TITLES, root_content, root_object_kind, template_fingerprint
@@ -235,7 +240,19 @@ class ObsidianAdapter:
         guard = self._write_guard(binding)
         if guard:
             return guard
-        return self._write_asset(asset, "05", "profile_material", "profile", group_by_topic=False)
+        assert self._root is not None
+        try:
+            preflight_obsidian_profile_index(self._root, asset)
+        except (OSError, ValueError, ContentSourceContractError) as exc:
+            return AdapterResult.failed("version_conflict", str(exc), blocked=True)
+        result = self._write_asset(asset, "05", "profile_material", "profile", group_by_topic=False)
+        if result.status not in {"ok", "reused"}:
+            return result
+        try:
+            sync_obsidian_profile_index(self._root, asset)
+        except (OSError, ValueError, ContentSourceContractError) as exc:
+            return AdapterResult.failed("readback_failed", f"Profile 已写入，但索引未通过回读：{exc}", blocked=True)
+        return result
 
     def read_back(self, binding: Binding, refs: Sequence[BackendObjectRef] | None = None) -> AdapterResult:
         inspected = self.inspect_structure(binding)

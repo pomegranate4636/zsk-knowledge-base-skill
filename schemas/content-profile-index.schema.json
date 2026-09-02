@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/slbb1995/zsk-knowledge-base-skill/schemas/content-profile-index.schema.json",
+  "title": "Content Profile Index v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "knowledge_base_id", "profiles", "revision"],
+  "properties": {
+    "contract_version": {"const": "content-source-v1"},
+    "knowledge_base_id": {"type": "string", "pattern": "^KB-[A-F0-9]{16}$"},
+    "profiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["profile_id", "display_name", "aliases", "object_ref", "status", "is_primary", "content_sha256"],
+        "properties": {
+          "profile_id": {"type": "string", "pattern": "^PRF-[A-F0-9]{16}$"},
+          "display_name": {"type": "string", "minLength": 1},
+          "aliases": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+          "object_ref": {"type": "string", "minLength": 1},
+          "status": {"enum": ["active", "disabled"]},
+          "is_primary": {"type": "boolean"},
+          "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "revision": {"type": "integer", "minimum": 1}
+  }
+}

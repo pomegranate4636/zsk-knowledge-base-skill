@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import json
 from typing import Any
 
 from .adapter import KnowledgeBaseAdapter
@@ -82,5 +83,31 @@ class Stage6Knowledge:
         asset_id = "KNO-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
         applicability = request.applicability.strip() or "仅在来源所述场景中使用。"
         cautions = request.cautions.strip() or "不得补充来源未说明的事实或承诺。"
-        body = f"---\nsource_id: \"{request.source.source_id}\"\n---\n\n# {request.title.strip()}\n\n## 主题\n\n{request.topic.strip()}\n\n## 核心知识\n\n{request.facts.strip()}\n\n## 适用范围\n\n{applicability}\n\n## 使用边界\n\n{cautions}\n\n## 来源\n\n- {request.source.source_title}\n"
-        return AssetPayload(asset_id, request.title.strip(), body, request.source.source_id, "business_knowledge", {"topic": request.topic.strip()})
+        topic = json.dumps(request.topic.strip(), ensure_ascii=False)
+        scope = json.dumps(applicability, ensure_ascii=False)
+        body = (
+            "---\n"
+            f"asset_id: {asset_id}\n"
+            "type: business_knowledge_asset\n"
+            "status: confirmed\n"
+            "keywords:\n"
+            f"  - {topic}\n"
+            "applicable_workflows:\n"
+            "  - content-koubo-slim\n"
+            "  - content-gzh-slim\n"
+            "applicability:\n"
+            f"  - {scope}\n"
+            f"source_id: \"{request.source.source_id}\"\n"
+            "---\n\n"
+            f"# {request.title.strip()}\n\n## 主题\n\n{request.topic.strip()}\n\n"
+            f"## 核心知识\n\n{request.facts.strip()}\n\n## 适用范围\n\n{applicability}\n\n"
+            f"## 使用边界\n\n{cautions}\n\n## 来源\n\n- {request.source.source_title}\n"
+        )
+        return AssetPayload(
+            asset_id,
+            request.title.strip(),
+            body,
+            request.source.source_id,
+            "business_knowledge",
+            {"topic": request.topic.strip(), "status": "confirmed", "applicable_workflows": ("content-koubo-slim", "content-gzh-slim")},
+        )

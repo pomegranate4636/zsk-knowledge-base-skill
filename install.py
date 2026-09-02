@@ -53,6 +53,10 @@ def validate_source(source_root: Path) -> list[str]:
         errors.append("缺少 Content 口播 Slim 配置交接模块：shared/content_koubo_slim_handoff.py")
     if not (source_root / "shared" / "configure_content_koubo_slim.py").is_file():
         errors.append("缺少 Content 口播 Slim 配置交接入口：shared/configure_content_koubo_slim.py")
+    if not (source_root / "shared" / "content_source_contract.py").is_file():
+        errors.append("缺少 content-source-v1 公共合同：shared/content_source_contract.py")
+    if not (source_root / "shared" / "configure_content_source.py").is_file():
+        errors.append("缺少公共 Content 配置入口：shared/configure_content_source.py")
     return errors
 
 

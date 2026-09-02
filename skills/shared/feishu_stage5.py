@@ -2,7 +2,7 @@
 from __future__ import annotations
 import hashlib
 import json
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 from .contracts import AdapterResult, BackendObjectRef, ExceptionRecord, PageArtifact, SourceRecord
 from .feishu_cli import CliResponse, CliRunner
 from .naming import page_file_name, safe_title, source_original_name
@@ -187,7 +187,8 @@ class FeishuStage5Storage:
             fetched_document = fetched.get("document") if isinstance(fetched.get("document"), dict) else None
             if failure or not fetched_document or not self._matches_document(title, payload, str(fetched_document.get("content", "")), wrapped):
                 return failure or AdapterResult.failed("version_conflict", "Existing Doc content differs.", blocked=True)
-            ref = self._ref(key, kind, payload, locator)
+            effective_locator = f"feishu://doc/{token}" if kind in {"knowledge_asset", "method_asset", "profile"} else locator
+            ref = self._ref(key, kind, payload, effective_locator)
             self._stored[key] = (hashlib.sha256(payload).hexdigest(), ref)
             return AdapterResult.reused(ref, checked=("remote_doc_present", "content_readback"))
         create = (
@@ -213,7 +214,8 @@ class FeishuStage5Storage:
         fetched_document = fetched.get("document") if isinstance(fetched.get("document"), dict) else None
         if not fetched_document or not self._matches_document(title, payload, str(fetched_document.get("content", "")), wrapped):
             return AdapterResult.failed("readback_failed", "Created Doc content failed readback.", blocked=True)
-        ref = self._ref(key, kind, payload, locator)
+        effective_locator = f"feishu://doc/{token}" if kind in {"knowledge_asset", "method_asset", "profile"} else locator
+        ref = self._ref(key, kind, payload, effective_locator)
         self._stored[key] = (hashlib.sha256(payload).hexdigest(), ref)
         return AdapterResult.ok(ref, checked=("wiki_doc_created", "markdown_written", "content_readback"))
 
