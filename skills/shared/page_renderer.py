@@ -9,7 +9,6 @@ import platform
 from pathlib import Path
 import re
 import shutil
-import signal
 import stat
 import subprocess
 import uuid
@@ -63,10 +62,18 @@ $deck=$null
 $owned=$false
 try {
     $app=New-Object -ComObject PowerPoint.Application
-    $processId=0
+    [uint32]$processId=0
     [void][ZskUser32]::GetWindowThreadProcessId([IntPtr]$app.HWND,[ref]$processId)
     $owned=($processId -gt 0 -and $existingPids -notcontains [int]$processId)
-    if ($owned) { [IO.File]::WriteAllText($PidFile,[string]$processId,[Text.Encoding]::ASCII) }
+    if ($owned) {
+        $process=Get-Process -Id $processId -ErrorAction Stop
+        $identity=[ordered]@{
+            pid=[int]$processId
+            process_name=[string]$process.ProcessName
+            start_time_utc=$process.StartTime.ToUniversalTime().ToString('o')
+        } | ConvertTo-Json -Compress
+        [IO.File]::WriteAllText($PidFile,$identity,[Text.Encoding]::UTF8)
+    }
     $deck=$app.Presentations.Open($Source,$true,$false,$false)
     $deck.SaveAs($Target,32)
 } finally {
@@ -79,6 +86,18 @@ try {
     [GC]::Collect()
     [GC]::WaitForPendingFinalizers()
 }
+'''
+_WINDOWS_POWERPOINT_CLEANUP_SCRIPT = r'''
+param([string]$IdentityFile)
+$ErrorActionPreference='Stop'
+if (-not (Test-Path -LiteralPath $IdentityFile -PathType Leaf)) { exit 0 }
+$identity=Get-Content -LiteralPath $IdentityFile -Raw -Encoding UTF8 | ConvertFrom-Json
+if ([int]$identity.pid -lt 1 -or [string]$identity.process_name -ne 'POWERPNT') { exit 0 }
+$process=Get-Process -Id ([int]$identity.pid) -ErrorAction SilentlyContinue
+if ($null -eq $process -or $process.ProcessName -ne 'POWERPNT') { exit 0 }
+$startTime=$process.StartTime.ToUniversalTime().ToString('o')
+if ($startTime -ne [string]$identity.start_time_utc) { exit 0 }
+Stop-Process -Id ([int]$identity.pid) -Force -ErrorAction Stop
 '''
 _POWERPOINT_EXPORT_SCRIPT = r'''
 on run argv
@@ -226,10 +245,10 @@ def _pptx_to_pdf_with_powerpoint_windows(source: Path, work_root: Path, powershe
             errors="replace",
         )
     except subprocess.TimeoutExpired as exc:
-        _terminate_recorded_powerpoint_process(pid_path)
+        _terminate_recorded_powerpoint_process(pid_path, powershell)
         raise PageRenderFailed("Microsoft PowerPoint PDF export timed out") from exc
     except OSError as exc:
-        _terminate_recorded_powerpoint_process(pid_path)
+        _terminate_recorded_powerpoint_process(pid_path, powershell)
         raise PageRenderFailed("Microsoft PowerPoint PDF export failed") from exc
     finally:
         try:
@@ -237,16 +256,19 @@ def _pptx_to_pdf_with_powerpoint_windows(source: Path, work_root: Path, powershe
         except OSError:
             pass
     if completed.returncode != 0:
-        _terminate_recorded_powerpoint_process(pid_path)
+        _terminate_recorded_powerpoint_process(pid_path, powershell)
         raise PageRenderFailed("Microsoft PowerPoint PDF export failed")
     try:
         if not target_pdf.is_file() or target_pdf.stat().st_size == 0:
-            _terminate_recorded_powerpoint_process(pid_path)
+            _terminate_recorded_powerpoint_process(pid_path, powershell)
             raise PageRenderFailed("Microsoft PowerPoint produced no PDF")
     except OSError as exc:
-        _terminate_recorded_powerpoint_process(pid_path)
+        _terminate_recorded_powerpoint_process(pid_path, powershell)
         raise PageRenderFailed("Microsoft PowerPoint PDF cannot be read") from exc
-    pid_path.unlink(missing_ok=True)
+    try:
+        pid_path.unlink(missing_ok=True)
+    except OSError:
+        pass
     return target_pdf
 
 
@@ -346,20 +368,41 @@ def _find_windows_powerpoint_automation() -> str | None:
     return powershell if completed.returncode == 0 else None
 
 
-def _terminate_recorded_powerpoint_process(pid_path: Path) -> None:
-    """只终止当前渲染实例明确记录的 PowerPoint 进程。"""
+def _terminate_recorded_powerpoint_process(pid_path: Path, powershell: str) -> None:
+    """仅在 PID、进程名和启动时间都匹配时终止本次 PowerPoint。"""
+    cleanup_path = pid_path.with_name("cleanup-pptx.ps1")
     try:
-        raw = pid_path.read_text(encoding="ascii").strip()
-        if not raw.isdigit() or int(raw) < 1:
+        if not pid_path.is_file():
             return
-        os.kill(int(raw), signal.SIGTERM)
-    except (FileNotFoundError, OSError, ValueError):
+        cleanup_path.write_text(_WINDOWS_POWERPOINT_CLEANUP_SCRIPT, encoding="utf-8")
+        subprocess.run(
+            (
+                powershell,
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(cleanup_path),
+                str(pid_path),
+            ),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+            shell=False,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except (OSError, subprocess.TimeoutExpired):
         pass
     finally:
-        try:
-            pid_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        for path in (cleanup_path, pid_path):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _is_safe_directory(mode: int) -> bool:

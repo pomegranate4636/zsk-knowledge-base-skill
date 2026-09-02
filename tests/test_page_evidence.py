@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
-import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -122,7 +123,7 @@ class PageEvidenceIntakeTests(unittest.TestCase):
     def test_obsidian_page_evidence_is_isolated_by_source_and_read_back(self, convert, render) -> None:
         convert.return_value = MarkdownConversion("# PDF\n", "markitdown", "0.1.6")
         render.return_value = rendered()
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory(dir="/private/tmp" if sys.platform == "darwin" else None) as folder:
             active_binding = binding(locator=folder)
             adapter = ObsidianAdapter()
             adapter.resolve_binding(active_binding)
@@ -326,16 +327,64 @@ class PageRendererContractTests(unittest.TestCase):
                 ) as terminate:
                     with self.assertRaisesRegex(PageRenderFailed, "timed out"):
                         page_renderer._pptx_to_pdf_with_powerpoint_windows(source, work_root, "powershell.exe")
-            terminate.assert_called_once_with(pid_path)
+            terminate.assert_called_once_with(pid_path, "powershell.exe")
 
     def test_windows_cleanup_terminates_only_the_recorded_process(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             pid_path = Path(folder) / "render-pptx.pid"
-            pid_path.write_text("4242", encoding="ascii")
-            with mock.patch("shared.page_renderer.os.kill") as kill:
-                page_renderer._terminate_recorded_powerpoint_process(pid_path)
-            kill.assert_called_once_with(4242, signal.SIGTERM)
+            pid_path.write_text(
+                '{"pid":4242,"process_name":"POWERPNT","start_time_utc":"2026-09-02T00:00:00.0000000Z"}',
+                encoding="utf-8",
+            )
+            completed = subprocess.CompletedProcess(("powershell.exe",), 0, "", "")
+            with mock.patch("shared.page_renderer.subprocess.run", return_value=completed) as run:
+                page_renderer._terminate_recorded_powerpoint_process(pid_path, "powershell.exe")
+            argv = run.call_args.args[0]
+            self.assertIn("cleanup-pptx.ps1", str(argv))
+            self.assertIn(str(pid_path), argv)
             self.assertFalse(pid_path.exists())
+
+    @unittest.skipUnless(sys.platform == "win32", "requires a real Windows process table")
+    def test_windows_cleanup_checks_real_process_name_and_start_time(self) -> None:
+        powershell = shutil.which("powershell.exe") or shutil.which("powershell") or shutil.which("pwsh")
+        self.assertIsNotNone(powershell)
+        with tempfile.TemporaryDirectory() as folder:
+            fake_powerpoint = Path(folder) / "POWERPNT.exe"
+            shutil.copy2(Path(os.environ["WINDIR"]) / "System32" / "ping.exe", fake_powerpoint)
+            process = subprocess.Popen(
+                (str(fake_powerpoint), "127.0.0.1", "-t"),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                identity_command = (
+                    f"$p=Get-Process -Id {process.pid};"
+                    "$v=[ordered]@{pid=[int]$p.Id;process_name=[string]$p.ProcessName;"
+                    "start_time_utc=$p.StartTime.ToUniversalTime().ToString('o')};"
+                    "$v|ConvertTo-Json -Compress"
+                )
+                completed = subprocess.run(
+                    (powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", identity_command),
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                    shell=False,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                identity = json.loads(completed.stdout.strip())
+                self.assertEqual(str(identity["process_name"]).upper(), "POWERPNT")
+                identity_path = Path(folder) / "render-pptx.pid"
+                identity_path.write_text(json.dumps(identity), encoding="utf-8")
+                page_renderer._terminate_recorded_powerpoint_process(identity_path, str(powershell))
+                process.wait(timeout=15)
+                self.assertIsNotNone(process.returncode)
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait(timeout=15)
 
     @mock.patch("shared.page_renderer._pdf_page_count", return_value=2)
     @mock.patch("shared.page_renderer.renderer_status", return_value=(True, ()))
@@ -347,7 +396,7 @@ class PageRendererContractTests(unittest.TestCase):
             prefix.with_name(prefix.name + "-3.png").write_bytes(PNG)
             return mock.Mock(returncode=0, stdout="", stderr="")
 
-        with tempfile.TemporaryDirectory() as folder, mock.patch(
+        with tempfile.TemporaryDirectory(dir="/private/tmp" if sys.platform == "darwin" else None) as folder, mock.patch(
             "shared.page_renderer._run", side_effect=fake_run
         ):
             with self.assertRaises(PageRenderFailed):
