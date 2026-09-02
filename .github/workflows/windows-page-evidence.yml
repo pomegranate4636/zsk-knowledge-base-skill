@@ -1,0 +1,24 @@
+name: Windows page evidence
+
+on:
+  pull_request:
+    paths:
+      - "install.py"
+      - "skills/shared/page_renderer.py"
+      - "tests/test_install_doctor.py"
+      - "tests/test_page_evidence.py"
+      - ".github/workflows/windows-page-evidence.yml"
+  workflow_dispatch:
+
+jobs:
+  windows-contract:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run Windows renderer tests
+        run: |
+          python -m unittest discover -s tests -p "test_install_doctor.py" -v
+          python -m unittest discover -s tests -p "test_page_evidence.py" -v

@@ -24,6 +24,10 @@ COMPONENTS = (
 MARKITDOWN_SPEC = "markitdown[docx,pdf,pptx,xlsx]==0.1.6"
 MARKITDOWN_INSTALL_TIMEOUT_SECONDS = 600
 MAC_POWERPOINT = Path("/Applications/Microsoft PowerPoint.app")
+WINDOWS_POWERPOINT_DETECTION_SCRIPT = (
+    "$powerPointType=[type]::GetTypeFromProgID('PowerPoint.Application');"
+    "if ($null -eq $powerPointType) { exit 1 }; exit 0"
+)
 
 
 def default_destination() -> Path:
@@ -133,7 +137,7 @@ def rollback_fresh_install(destination: Path) -> None:
 
 def page_evidence_status() -> dict[str, bool | str | None]:
     pdf_ready = _optional_binary_ready(("pdftoppm",), ("-v",)) and _optional_binary_ready(("pdfinfo",), ("-v",))
-    if _mac_powerpoint_ready():
+    if _mac_powerpoint_ready() or _windows_powerpoint_ready():
         ppt_engine = "Microsoft PowerPoint"
     elif _optional_binary_ready(("soffice", "libreoffice"), ("--version",)):
         ppt_engine = "LibreOffice"
@@ -144,6 +148,28 @@ def page_evidence_status() -> dict[str, bool | str | None]:
 
 def _mac_powerpoint_ready() -> bool:
     return platform.system() == "Darwin" and MAC_POWERPOINT.is_dir() and shutil.which("osascript") is not None
+
+
+def _windows_powerpoint_ready() -> bool:
+    if platform.system() != "Windows":
+        return False
+    powershell = shutil.which("powershell.exe") or shutil.which("powershell") or shutil.which("pwsh")
+    if not powershell:
+        return False
+    try:
+        completed = subprocess.run(
+            (powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_POWERPOINT_DETECTION_SCRIPT),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+            shell=False,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
 
 
 def _optional_binary_ready(names: tuple[str, ...], version_args: tuple[str, ...]) -> bool:
