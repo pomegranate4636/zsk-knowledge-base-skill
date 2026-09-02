@@ -77,7 +77,13 @@ def remove_unpersisted_local_images(text: str) -> str:
     """移除 MarkItDown 未实际落地的本地图片链接，避免知识库显示破图。"""
     def replace(match: re.Match[str]) -> str:
         target = match.group(2).strip().strip("<>")
-        if re.match(r"^(?:https?://|data:)", target, flags=re.IGNORECASE):
+        if re.match(r"^https?://", target, flags=re.IGNORECASE):
+            return match.group(0)
+        if re.fullmatch(
+            r"data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=]+",
+            target,
+            flags=re.IGNORECASE,
+        ):
             return match.group(0)
         alt = match.group(1).strip()
         suffix = f"（{alt}）" if alt else ""

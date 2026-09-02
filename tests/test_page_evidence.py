@@ -153,6 +153,55 @@ class PageEvidenceIntakeTests(unittest.TestCase):
             )
             self.assertEqual((routed.status, routed.code), ("registered", None))
 
+    def test_fresh_obsidian_intake_reuses_human_named_page_source_without_reconversion(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/private/tmp" if sys.platform == "darwin" else None) as folder:
+            active_binding = binding(locator=folder)
+            first_adapter = ObsidianAdapter()
+            first_adapter.resolve_binding(active_binding)
+            first_adapter.create_skeleton(active_binding)
+            request = IntakeRequest(
+                TASK_ID,
+                active_binding,
+                "资料.pdf",
+                b"pdf",
+                "资料",
+                "business_knowledge",
+                original_retention_approved=True,
+                page_evidence_mode="required",
+            )
+            with mock.patch("shared.stage5_intake.convert_to_markdown") as convert, mock.patch(
+                "shared.stage5_intake.render_page_evidence"
+            ) as render:
+                convert.return_value = MarkdownConversion("# PDF\n", "markitdown", "0.1.6")
+                render.return_value = rendered()
+                first = Stage5Intake(first_adapter).execute(request)
+            self.assertEqual((first.status, first.code), ("registered", None))
+            before = {
+                path.relative_to(folder).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in Path(folder).rglob("*")
+                if path.is_file()
+            }
+
+            fresh_adapter = ObsidianAdapter()
+            fresh_adapter.resolve_binding(active_binding)
+            with mock.patch(
+                "shared.stage5_intake.convert_to_markdown",
+                side_effect=AssertionError("existing source must not be reconverted"),
+            ), mock.patch(
+                "shared.stage5_intake.render_page_evidence",
+                side_effect=AssertionError("existing pages must not be rerendered"),
+            ):
+                reused = Stage5Intake(fresh_adapter).execute(request)
+            after = {
+                path.relative_to(folder).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in Path(folder).rglob("*")
+                if path.is_file()
+            }
+            self.assertEqual((reused.status, reused.code), ("reused", None))
+            self.assertEqual(reused.evidence["existing_layout_reused"], "human_named")
+            self.assertEqual(reused.record.source_id, first.source_id)
+            self.assertEqual(before, after)
+
 
 class PageEvidenceStorageTests(unittest.TestCase):
     def test_feishu_page_name_is_human_readable_and_listed_after_upload(self) -> None:

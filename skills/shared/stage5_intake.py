@@ -106,6 +106,9 @@ class Stage5Intake:
             return self._exception(request.binding, source_id, code, evidence)
         if suffix not in SUPPORTED_SUFFIXES:
             return self._exception(request.binding, source_id, "format_unsupported", evidence)
+        existing = self._reuse_existing_source(request, source_id, digest, evidence)
+        if existing is not None:
+            return existing
         try:
             conversion = self._readable(request.payload, suffix)
         except ConverterUnavailable:
@@ -205,6 +208,33 @@ class Stage5Intake:
         status = "reused" if all(item == "reused" for item in write_statuses) else "registered"
         evidence.update({"status": status, "code": None, "output_ref_ids": [ref.object_id for ref in refs]})
         return IntakeResponse(status, None, source_id, refs, record, evidence)
+
+    def _reuse_existing_source(self, request: IntakeRequest, source_id: str, digest: str, evidence: dict[str, Any]) -> IntakeResponse | None:
+        """新旧 Obsidian 布局均先按原件哈希复用，避免重复转换或误写 02。"""
+        lookup = getattr(self.adapter, "reuse_existing_source", None)
+        if not callable(lookup):
+            return None
+        result = lookup(request.binding, source_id, digest, request.source_role)
+        if result is None:
+            return None
+        self._event(evidence, "reuse_existing_source", result.status, result.code)
+        if result.status not in {"ok", "reused"}:
+            return self._exception(request.binding, source_id, result.code or "readback_failed", evidence, result.object_refs)
+        source = result.metadata.get("source_record")
+        if not isinstance(source, SourceRecord):
+            return self._exception(request.binding, source_id, "readback_failed", evidence, result.object_refs)
+        readback = self.adapter.read_back(request.binding, result.object_refs)
+        self._event(evidence, "read_back", readback.status, readback.code)
+        if readback.status not in {"ok", "reused"}:
+            return self._exception(request.binding, source_id, readback.code or "readback_failed", evidence, result.object_refs)
+        self._names[(request.binding.client_id, request.file_name.casefold())] = source_id
+        evidence.update({
+            "status": "reused",
+            "code": None,
+            "existing_layout_reused": result.metadata.get("layout"),
+            "output_ref_ids": [ref.object_id for ref in result.object_refs],
+        })
+        return IntakeResponse("reused", None, source_id, result.object_refs, source, evidence)
 
     def _ready(self, binding: Binding, evidence: dict[str, Any]) -> tuple[str, str] | None:
         for action, call in (("doctor", self.adapter.doctor), ("resolve_binding", lambda: self.adapter.resolve_binding(binding)), ("inspect_structure", lambda: self.adapter.inspect_structure(binding))):
