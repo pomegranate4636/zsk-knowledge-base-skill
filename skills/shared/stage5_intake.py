@@ -220,6 +220,7 @@ class Stage5Intake:
             digest,
             request.source_role,
             request.page_evidence_mode,
+            request.original_retention_approved,
         )
         if result is None:
             return None

@@ -133,6 +133,7 @@ class ObsidianAdapter:
         original_sha256: str,
         requested_role: str,
         requested_page_evidence_mode: str,
+        current_original_retention_approved: bool,
     ) -> AdapterResult | None:
         """回读已登记的同 SHA 来源，兼容旧 SRC 目录和新版中文目录。"""
         guard = self._write_guard(binding)
@@ -150,6 +151,7 @@ class ObsidianAdapter:
                 original_sha256,
                 requested_role,
                 requested_page_evidence_mode,
+                current_original_retention_approved,
             )
         except ContractError as exc:
             return AdapterResult.failed(exc.code, exc.detail, blocked=True)
@@ -392,6 +394,7 @@ class ObsidianAdapter:
         original_sha256: str,
         requested_role: str,
         requested_page_evidence_mode: str,
+        current_original_retention_approved: bool,
     ) -> tuple[SourceRecord, tuple[tuple[BackendObjectRef, Path], ...]]:
         readable_candidates = tuple(
             path for path in source_dir.iterdir()
@@ -428,6 +431,8 @@ class ObsidianAdapter:
             raise ContractError("duplicate_conflict", "Registered source role conflicts with this request.")
         page_mode = meta.get("page_evidence_mode") if isinstance(meta.get("page_evidence_mode"), str) else "off"
         page_count = meta.get("page_count") if isinstance(meta.get("page_count"), int) else 0
+        if page_mode == "required" and not current_original_retention_approved:
+            raise ContractError("privacy_approval_required", "Registered page evidence requires current original retention approval.")
         if requested_page_evidence_mode == "required" and page_mode != "required":
             raise ContractError("page_evidence_failed", "Registered source has no complete page evidence.")
         page_artifacts: tuple[PageArtifact, ...] = ()
