@@ -153,6 +153,42 @@ class PageTextEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence[1].text_source, "ocr")
         self.assertEqual(evidence[1].review_status, "auto_verified")
 
+    def test_pdf_uses_meaningful_embedded_text_before_ocr(self) -> None:
+        provider = FakeOcr(0.96)
+        with mock.patch(
+            "shared.page_text.extract_pdf_page_text",
+            return_value=("翠湖天地一期项目资料与区位介绍及建筑品质配套说明详细资料", "建筑面积二百平方米房屋格局配套说明以及产权和交易条件资料"),
+        ):
+            evidence = build_page_text_evidence(
+                SOURCE_ID,
+                ".pdf",
+                b"pdf",
+                (page(1, PNG_1), page(2, PNG_2)),
+                provider,
+            )
+        self.assertEqual(provider.calls, [])
+        self.assertEqual([item.review_status for item in evidence], ["verified_native", "verified_native"])
+        self.assertEqual(
+            [item.verbatim_text for item in evidence],
+            ["翠湖天地一期项目资料与区位介绍及建筑品质配套说明详细资料", "建筑面积二百平方米房屋格局配套说明以及产权和交易条件资料"],
+        )
+
+    def test_pdf_template_placeholder_is_not_trusted_as_native_text(self) -> None:
+        provider = FakeOcr(0.96)
+        with mock.patch(
+            "shared.page_text.extract_pdf_page_text",
+            return_value=("空白演示\n单击输入您的封面副标题", "空白演示\n单击输入您的封面副标题"),
+        ):
+            evidence = build_page_text_evidence(
+                SOURCE_ID,
+                ".pdf",
+                b"pdf",
+                (page(1, PNG_1), page(2, PNG_2)),
+                provider,
+            )
+        self.assertEqual(provider.calls, [PNG_1, PNG_2])
+        self.assertEqual([item.text_source for item in evidence], ["ocr", "ocr"])
+
     def test_low_confidence_ocr_is_marked_unverified_without_requesting_human_review(self) -> None:
         evidence = build_page_text_evidence(
             SOURCE_ID,
