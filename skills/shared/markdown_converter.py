@@ -1,6 +1,8 @@
 """ZSK 的单一富文档 Markdown 转换器：只调用本机 MarkItDown。"""
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import dataclass
 from functools import lru_cache
 import os
@@ -77,8 +79,20 @@ def remove_unpersisted_local_images(text: str) -> str:
     """移除 MarkItDown 未实际落地的本地图片链接，避免知识库显示破图。"""
     def replace(match: re.Match[str]) -> str:
         target = match.group(2).strip().strip("<>")
-        if re.match(r"^(?:https?://|data:)", target, flags=re.IGNORECASE):
+        if re.match(r"^https?://", target, flags=re.IGNORECASE):
             return match.group(0)
+        data_image = re.fullmatch(
+            r"data:image/[A-Za-z0-9.+-]+;base64,([A-Za-z0-9+/=]+)",
+            target,
+            flags=re.IGNORECASE,
+        )
+        if data_image:
+            try:
+                decoded = base64.b64decode(data_image.group(1), validate=True)
+            except (binascii.Error, ValueError):
+                decoded = b""
+            if decoded:
+                return match.group(0)
         alt = match.group(1).strip()
         suffix = f"（{alt}）" if alt else ""
         return f"> [!note] 原文图片未在轻量文字模式中保存{suffix}。"

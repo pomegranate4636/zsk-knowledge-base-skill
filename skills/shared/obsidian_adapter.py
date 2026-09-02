@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path, PurePath
 import stat
 from typing import Sequence
 
-from .contracts import AdapterResult, AssetPayload, BackendObjectRef, Binding, ExceptionRecord, PageArtifact, SourceRecord, ROOT_KEYS
+from .contracts import AdapterResult, AssetPayload, BackendObjectRef, Binding, ContractError, ExceptionRecord, PageArtifact, SourceRecord, ROOT_KEYS
 from .naming import find_obsidian_source_dir, page_file_name, source_original_name, source_readable_name, unique_source_dir
 from .obsidian_stage6 import ObsidianStage6Storage
 from .templates import ROOT_TITLES, root_content, root_object_kind, template_fingerprint
@@ -125,6 +126,47 @@ class ObsidianAdapter:
     def store_readable(self, binding: Binding, source: SourceRecord, payload: bytes) -> AdapterResult:
         return self._store_source(binding, source, payload, "readable")
 
+    def reuse_existing_source(
+        self,
+        binding: Binding,
+        source_id: str,
+        original_sha256: str,
+        requested_role: str,
+        requested_page_evidence_mode: str,
+        current_original_retention_approved: bool,
+    ) -> AdapterResult | None:
+        """回读已登记的同 SHA 来源，兼容旧 SRC 目录和新版中文目录。"""
+        guard = self._write_guard(binding)
+        if guard:
+            return guard
+        assert self._root is not None
+        source_dir = find_obsidian_source_dir(self._root, source_id)
+        if source_dir is None:
+            return None
+        try:
+            record, refs = self._existing_source_record(
+                binding,
+                source_dir,
+                source_id,
+                original_sha256,
+                requested_role,
+                requested_page_evidence_mode,
+                current_original_retention_approved,
+            )
+        except ContractError as exc:
+            return AdapterResult.failed(exc.code, exc.detail, blocked=True)
+        except ValueError as exc:
+            return AdapterResult.failed("readback_failed", str(exc), blocked=True)
+        for ref, path in refs:
+            self._source_refs[ref.object_id] = ref
+            self._source_paths[ref.object_id] = path
+        self._source_dirs[source_id] = source_dir
+        return AdapterResult.reused(
+            *(ref for ref, _path in refs),
+            checked=("existing_source_identity", "existing_source_hash", "existing_source_layout"),
+            metadata={"source_record": record, "layout": "legacy_src" if source_dir.name == source_id else "human_named"},
+        )
+
     def store_page_evidence(self, binding: Binding, source: SourceRecord, page: PageArtifact, payload: bytes) -> AdapterResult:
         guard = self._write_guard(binding)
         if guard:
@@ -150,7 +192,11 @@ class ObsidianAdapter:
         name = page_file_name(page.page_number)
         path = page_dir / name
         result = self._store_bytes(
-            path, payload, page.page_id, "source_page", "obsidian://01/页面证据"
+            path,
+            payload,
+            page.page_id,
+            "source_page",
+            f"obsidian://01/{source_dir.name}/页面证据",
         )
         if result.status in {"ok", "reused"}:
             for ref in result.object_refs:
@@ -339,6 +385,136 @@ class ObsidianAdapter:
                 self._source_refs[ref.object_id] = ref
                 self._source_paths[ref.object_id] = path
         return result
+
+    def _existing_source_record(
+        self,
+        binding: Binding,
+        source_dir: Path,
+        source_id: str,
+        original_sha256: str,
+        requested_role: str,
+        requested_page_evidence_mode: str,
+        current_original_retention_approved: bool,
+    ) -> tuple[SourceRecord, tuple[tuple[BackendObjectRef, Path], ...]]:
+        readable_candidates = tuple(
+            path for path in source_dir.iterdir()
+            if path.name == "readable.md" or path.name.endswith("-可读版.md")
+        )
+        if len(readable_candidates) != 1:
+            raise ValueError("Registered source has no unique readable copy.")
+        readable = readable_candidates[0]
+        if not self._normal_file(readable):
+            raise ValueError("Registered readable copy is unsafe.")
+        meta = self._frontmatter(readable)
+        if meta.get("source_id") != source_id or meta.get("original_sha256") != original_sha256:
+            raise ValueError("Registered source metadata does not match this original.")
+        if meta.get("client_id") != binding.client_id:
+            raise ContractError("binding_conflict", "Registered source belongs to another or unknown client binding.")
+        original_name = meta.get("original_file_name")
+        source_title = meta.get("source_title")
+        if not isinstance(original_name, str) or not original_name or not isinstance(source_title, str) or not source_title:
+            raise ValueError("Registered source naming metadata is incomplete.")
+        suffix = PurePath(original_name).suffix.lower()
+        originals = tuple(
+            path for path in source_dir.iterdir()
+            if path.name.startswith("original.") or path.name == "original.bin" or path.name.endswith(f"-原件{suffix}")
+        )
+        if len(originals) != 1 or not self._normal_file(originals[0]):
+            raise ValueError("Registered source has no unique original copy.")
+        original = originals[0]
+        if hashlib.sha256(original.read_bytes()).hexdigest() != original_sha256:
+            raise ValueError("Registered original hash does not match this source.")
+        source_role = meta.get("source_role") if isinstance(meta.get("source_role"), str) else "unknown"
+        if source_role not in {"business_knowledge", "reference_method", "profile_material", "mixed", "unknown"}:
+            raise ValueError("Registered source role is invalid.")
+        if requested_role not in {"unknown", "mixed", source_role} and source_role not in {"unknown", "mixed"}:
+            raise ContractError("duplicate_conflict", "Registered source role conflicts with this request.")
+        page_mode = meta.get("page_evidence_mode") if isinstance(meta.get("page_evidence_mode"), str) else "off"
+        page_count = meta.get("page_count") if isinstance(meta.get("page_count"), int) else 0
+        if page_mode == "required" and not current_original_retention_approved:
+            raise ContractError("privacy_approval_required", "Registered page evidence requires current original retention approval.")
+        if requested_page_evidence_mode == "required" and page_mode != "required":
+            raise ContractError("page_evidence_failed", "Registered source has no complete page evidence.")
+        page_artifacts: tuple[PageArtifact, ...] = ()
+        page_refs: list[tuple[BackendObjectRef, Path]] = []
+        if page_mode == "required":
+            manifest = meta.get("page_manifest")
+            if not isinstance(manifest, list) or page_count != len(manifest):
+                raise ValueError("Registered page manifest is incomplete.")
+            try:
+                page_artifacts = tuple(PageArtifact(**item) for item in manifest)
+            except (TypeError, ValueError):
+                raise ValueError("Registered page manifest is invalid.") from None
+            page_dir = source_dir / "pages"
+            if not page_dir.is_dir():
+                page_dir = source_dir / "页面证据"
+            if not page_dir.is_dir() or page_dir.is_symlink():
+                raise ValueError("Registered page evidence directory is unavailable.")
+            for page in page_artifacts:
+                legacy = tuple(page_dir.glob(f"page-{page.page_number:03d}-*.png"))
+                candidates = legacy or (page_dir / page_file_name(page.page_number),)
+                if len(candidates) != 1 or not self._normal_file(candidates[0]):
+                    raise ValueError("Registered page evidence is incomplete.")
+                page_path = candidates[0]
+                if hashlib.sha256(page_path.read_bytes()).hexdigest() != page.sha256:
+                    raise ValueError("Registered page evidence hash differs.")
+                page_refs.append((self._existing_ref(f"source_page-{page.page_id}", "source_page", source_dir, page_path), page_path))
+        elif page_mode != "off" or page_count != 0:
+            raise ValueError("Registered page evidence mode is invalid.")
+        privacy = meta.get("privacy_status") if isinstance(meta.get("privacy_status"), str) else "passed"
+        permission = meta.get("permission_status") if isinstance(meta.get("permission_status"), str) else "allowed"
+        if privacy not in {"passed", "redacted"} or permission != "allowed":
+            raise ValueError("Registered source approval metadata is invalid.")
+        version_of = meta.get("version_of") if isinstance(meta.get("version_of"), str) else None
+        retained = meta.get("original_retention_approved")
+        if not isinstance(retained, bool):
+            retained = privacy == "passed"
+        display = meta.get("display_name") if isinstance(meta.get("display_name"), str) and meta.get("display_name") else source_title
+        content_kind = "presentation" if suffix == ".pptx" else "table" if suffix in {".xlsx", ".csv"} else "document" if suffix in {".pdf", ".docx"} else "text"
+        original_ref = self._existing_ref(f"source_original-{source_id}", "source_original", source_dir, original)
+        readable_ref = self._existing_ref(f"source_readable-{source_id}", "source_readable", source_dir, readable)
+        record = SourceRecord(
+            "zsk-source-record-v1", source_id, binding.client_id, source_title, source_role, content_kind,
+            original_name, original_sha256, hashlib.sha256(readable.read_bytes()).hexdigest(), privacy, permission,
+            version_of, "reused", retained, {"original": original_ref, "readable": readable_ref},
+            page_mode, page_count, page_artifacts, display,
+        )
+        return record, ((original_ref, original), (readable_ref, readable), *page_refs)
+
+    @staticmethod
+    def _frontmatter(path: Path) -> dict[str, object]:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError) as exc:
+            raise ValueError("Registered readable copy cannot be read.") from exc
+        if not lines or lines[0] != "---":
+            raise ValueError("Registered readable copy has no frontmatter.")
+        fields: dict[str, object] = {}
+        for line in lines[1:]:
+            if line == "---":
+                return fields
+            key, separator, value = line.partition(": ")
+            if not separator:
+                raise ValueError("Registered readable frontmatter is malformed.")
+            try:
+                fields[key] = json.loads(value)
+            except json.JSONDecodeError as exc:
+                raise ValueError("Registered readable frontmatter is malformed.") from exc
+        raise ValueError("Registered readable frontmatter is incomplete.")
+
+    @staticmethod
+    def _normal_file(path: Path) -> bool:
+        try:
+            mode = os.lstat(path).st_mode
+        except OSError:
+            return False
+        return stat.S_ISREG(mode) and not stat.S_ISLNK(mode)
+
+    @staticmethod
+    def _existing_ref(object_id: str, object_kind: str, source_dir: Path, path: Path) -> BackendObjectRef:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+        relative = path.relative_to(source_dir).as_posix()
+        return BackendObjectRef(f"obsidian-{object_id}", object_kind, f"obsidian://01/{source_dir.name}/{relative}", digest)
 
     @staticmethod
     def _store_bytes(path: Path, payload: bytes, object_key: str, object_kind: str, locator_root: str) -> AdapterResult:

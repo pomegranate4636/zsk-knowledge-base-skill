@@ -106,6 +106,12 @@ class Stage5Intake:
             return self._exception(request.binding, source_id, code, evidence)
         if suffix not in SUPPORTED_SUFFIXES:
             return self._exception(request.binding, source_id, "format_unsupported", evidence)
+        if request.page_evidence_mode == "required" and not request.original_retention_approved:
+            evidence["page_evidence"] = {"mode": "required", "status": "approval_required"}
+            return self._exception(request.binding, source_id, "privacy_approval_required", evidence)
+        existing = self._reuse_existing_source(request, source_id, digest, evidence)
+        if existing is not None:
+            return existing
         try:
             conversion = self._readable(request.payload, suffix)
         except ConverterUnavailable:
@@ -120,9 +126,6 @@ class Stage5Intake:
         sensitive_count = sum(len(pattern.findall(body)) for pattern in _SENSITIVE)
         evidence["privacy"] = {"sensitive_match_count": sensitive_count, "original_retention_approved": request.original_retention_approved}
         if sensitive_count and not request.original_retention_approved:
-            return self._exception(request.binding, source_id, "privacy_approval_required", evidence)
-        if request.page_evidence_mode == "required" and not request.original_retention_approved:
-            evidence["page_evidence"] = {"mode": "required", "status": "approval_required"}
             return self._exception(request.binding, source_id, "privacy_approval_required", evidence)
         name_key = (request.binding.client_id, request.file_name.casefold())
         prior_source = self._names.get(name_key)
@@ -206,6 +209,43 @@ class Stage5Intake:
         evidence.update({"status": status, "code": None, "output_ref_ids": [ref.object_id for ref in refs]})
         return IntakeResponse(status, None, source_id, refs, record, evidence)
 
+    def _reuse_existing_source(self, request: IntakeRequest, source_id: str, digest: str, evidence: dict[str, Any]) -> IntakeResponse | None:
+        """新旧 Obsidian 布局均先按原件哈希复用，避免重复转换或误写 02。"""
+        lookup = getattr(self.adapter, "reuse_existing_source", None)
+        if not callable(lookup):
+            return None
+        result = lookup(
+            request.binding,
+            source_id,
+            digest,
+            request.source_role,
+            request.page_evidence_mode,
+            request.original_retention_approved,
+        )
+        if result is None:
+            return None
+        self._event(evidence, "reuse_existing_source", result.status, result.code)
+        if result.status not in {"ok", "reused"}:
+            if result.code == "binding_conflict":
+                evidence.update({"status": "exception", "code": "binding_conflict", "output_ref_ids": []})
+                return IntakeResponse("exception", "binding_conflict", source_id, (), None, evidence)
+            return self._exception(request.binding, source_id, result.code or "readback_failed", evidence, result.object_refs)
+        source = result.metadata.get("source_record")
+        if not isinstance(source, SourceRecord):
+            return self._exception(request.binding, source_id, "readback_failed", evidence, result.object_refs)
+        readback = self.adapter.read_back(request.binding, result.object_refs)
+        self._event(evidence, "read_back", readback.status, readback.code)
+        if readback.status not in {"ok", "reused"}:
+            return self._exception(request.binding, source_id, readback.code or "readback_failed", evidence, result.object_refs)
+        self._names[(request.binding.client_id, request.file_name.casefold())] = source_id
+        evidence.update({
+            "status": "reused",
+            "code": None,
+            "existing_layout_reused": result.metadata.get("layout"),
+            "output_ref_ids": [ref.object_id for ref in result.object_refs],
+        })
+        return IntakeResponse("reused", None, source_id, result.object_refs, source, evidence)
+
     def _ready(self, binding: Binding, evidence: dict[str, Any]) -> tuple[str, str] | None:
         for action, call in (("doctor", self.adapter.doctor), ("resolve_binding", lambda: self.adapter.resolve_binding(binding)), ("inspect_structure", lambda: self.adapter.inspect_structure(binding))):
             result = call()
@@ -266,6 +306,7 @@ class Stage5Intake:
         suffix = PurePath(request.file_name).suffix.lower()
         unit_kind, unit_count = Stage5Intake._content_units(suffix, body)
         fields = {
+            "client_id": request.binding.client_id,
             "source_id": source_id, "source_title": request.source_title.strip(),
             "display_name": display_name,
             "original_file_name": request.file_name, "source_format": suffix.removeprefix("."),

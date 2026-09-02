@@ -58,6 +58,14 @@ def rendered(payload: bytes = PNG) -> RenderedPages:
     return RenderedPages((RenderedPage(artifact, payload),), 1, "pdftoppm")
 
 
+def file_snapshot(root: str) -> dict[str, str]:
+    return {
+        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in Path(root).rglob("*")
+        if path.is_file()
+    }
+
+
 class PageEvidenceIntakeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.binding = binding()
@@ -152,6 +160,331 @@ class PageEvidenceIntakeTests(unittest.TestCase):
                 KnowledgeRequest(TASK_ID, active_binding, response.record, "资料知识", "通用资料", "来源已经完整登记。")
             )
             self.assertEqual((routed.status, routed.code), ("registered", None))
+
+    def test_fresh_obsidian_intake_reuses_human_named_page_source_without_reconversion(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/private/tmp" if sys.platform == "darwin" else None) as folder:
+            active_binding = binding(locator=folder)
+            first_adapter = ObsidianAdapter()
+            first_adapter.resolve_binding(active_binding)
+            first_adapter.create_skeleton(active_binding)
+            request = IntakeRequest(
+                TASK_ID,
+                active_binding,
+                "资料.pdf",
+                b"pdf",
+                "资料",
+                "business_knowledge",
+                original_retention_approved=True,
+                page_evidence_mode="required",
+            )
+            with mock.patch("shared.stage5_intake.convert_to_markdown") as convert, mock.patch(
+                "shared.stage5_intake.render_page_evidence"
+            ) as render:
+                convert.return_value = MarkdownConversion("# PDF\n", "markitdown", "0.1.6")
+                render.return_value = rendered()
+                first = Stage5Intake(first_adapter).execute(request)
+            self.assertEqual((first.status, first.code), ("registered", None))
+            before = file_snapshot(folder)
+
+            fresh_adapter = ObsidianAdapter()
+            fresh_adapter.resolve_binding(active_binding)
+            with mock.patch(
+                "shared.stage5_intake.convert_to_markdown",
+                side_effect=AssertionError("existing source must not be reconverted"),
+            ), mock.patch(
+                "shared.stage5_intake.render_page_evidence",
+                side_effect=AssertionError("existing pages must not be rerendered"),
+            ):
+                reused = Stage5Intake(fresh_adapter).execute(request)
+            after = file_snapshot(folder)
+            self.assertEqual((reused.status, reused.code), ("reused", None))
+            self.assertEqual(reused.evidence["existing_layout_reused"], "human_named")
+            self.assertEqual(reused.record.source_id, first.source_id)
+            self.assertEqual(reused.refs, first.refs)
+            self.assertIn(f"/{first.record.display_name}/页面证据/第001页.png", reused.refs[-1].locator)
+            self.assertEqual(before, after)
+
+    def test_fresh_obsidian_reuse_rejects_another_client_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/private/tmp" if sys.platform == "darwin" else None) as folder:
+            owner = binding(locator=folder)
+            owner_adapter = ObsidianAdapter()
+            owner_adapter.resolve_binding(owner)
+            owner_adapter.create_skeleton(owner)
+            request = IntakeRequest(TASK_ID, owner, "资料.pdf", b"pdf", "资料", original_retention_approved=True)
+            with mock.patch(
+                "shared.stage5_intake.convert_to_markdown",
+                return_value=MarkdownConversion("# PDF\n", "markitdown", "0.1.6"),
+            ):
+                first = Stage5Intake(owner_adapter).execute(request)
+            self.assertEqual((first.status, first.code), ("registered", None))
+            before = file_snapshot(folder)
+            foreign = Binding(
+                BINDING_SCHEMA,
+                "CLT-OTHER-1234567890",
+                "其他客户",
+                "其他知识库",
+                "company",
+                "obsidian",
+                folder,
+                {key: f"root:{key}" for key in ROOT_KEYS},
+                TEMPLATE_VERSION,
+            )
+            foreign_adapter = ObsidianAdapter()
+            foreign_adapter.resolve_binding(foreign)
+            with mock.patch(
+                "shared.stage5_intake.convert_to_markdown",
+                side_effect=AssertionError("cross-client source must not be converted or reused"),
+            ):
+                rejected = Stage5Intake(foreign_adapter).execute(
+                    IntakeRequest(TASK_ID, foreign, "资料.pdf", b"pdf", "资料", original_retention_approved=True)
+                )
+            self.assertEqual((rejected.status, rejected.code), ("exception", "binding_conflict"))
+            self.assertIsNone(rejected.record)
+            self.assertFalse(any(event["action"] == "write_exception" for event in rejected.evidence["events"]))
+            self.assertEqual(before, file_snapshot(folder))
+
+    def test_fresh_obsidian_reuse_rejects_missing_client_identity_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/private/tmp" if sys.platform == "darwin" else None) as folder:
+            active_binding = binding(locator=folder)
+            first_adapter = ObsidianAdapter()
+            first_adapter.resolve_binding(active_binding)
+            first_adapter.create_skeleton(active_binding)
+            with mock.patch(
+                "shared.stage5_intake.convert_to_markdown",
+                return_value=MarkdownConversion("# PDF\n", "markitdown", "0.1.6"),
+            ):
+                first = Stage5Intake(first_adapter).execute(
+                    IntakeRequest(TASK_ID, active_binding, "资料.pdf", b"pdf", "资料", original_retention_approved=True)
+                )
+            readable = next((Path(folder) / "01-来源索引" / first.record.display_name).glob("*-可读版.md"))
+            content = readable.read_text(encoding="utf-8")
+            readable.write_text(
+                "\n".join(line for line in content.splitlines() if not line.startswith("client_id: ")) + "\n",
+                encoding="utf-8",
+            )
+            before = file_snapshot(folder)
+            fresh_adapter = ObsidianAdapter()
+            fresh_adapter.resolve_binding(active_binding)
+            with mock.patch(
+                "shared.stage5_intake.convert_to_markdown",
+                side_effect=AssertionError("unbound source must not be converted or reused"),
+            ):
+                rejected = Stage5Intake(fresh_adapter).execute(
+                    IntakeRequest(
+                        TASK_ID,
+                        active_binding,
+                        "资料.pdf",
+                        b"pdf",
+                        "资料",
+                        original_retention_approved=True,
+                    )
+                )
+            self.assertEqual((rejected.status, rejected.code), ("exception", "binding_conflict"))
+            self.assertFalse(any(event["action"] == "write_exception" for event in rejected.evidence["events"]))
+            self.assertEqual(before, file_snapshot(folder))
+
+    def test_text_only_source_cannot_satisfy_required_page_evidence(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/private/tmp" if sys.platform == "darwin" else None) as folder:
+            active_binding = binding(locator=folder)
+            first_adapter = ObsidianAdapter()
+            first_adapter.resolve_binding(active_binding)
+            first_adapter.create_skeleton(active_binding)
+            with mock.patch(
+                "shared.stage5_intake.convert_to_markdown",
+                return_value=MarkdownConversion("# PDF\n", "markitdown", "0.1.6"),
+            ):
+                first = Stage5Intake(first_adapter).execute(
+                    IntakeRequest(TASK_ID, active_binding, "资料.pdf", b"pdf", "资料", original_retention_approved=True)
+                )
+            self.assertEqual(first.record.page_evidence_mode, "off")
+            fresh_adapter = ObsidianAdapter()
+            fresh_adapter.resolve_binding(active_binding)
+            with mock.patch(
+                "shared.stage5_intake.convert_to_markdown",
+                side_effect=AssertionError("registered source must not be reconverted"),
+            ), mock.patch(
+                "shared.stage5_intake.render_page_evidence",
+                side_effect=AssertionError("incomplete source must not be reported as reused"),
+            ):
+                rejected = Stage5Intake(fresh_adapter).execute(
+                    IntakeRequest(
+                        TASK_ID,
+                        active_binding,
+                        "资料.pdf",
+                        b"pdf",
+                        "资料",
+                        original_retention_approved=True,
+                        page_evidence_mode="required",
+                    )
+                )
+            self.assertEqual((rejected.status, rejected.code), ("exception", "page_evidence_failed"))
+            self.assertTrue(any(event["action"] == "write_exception" for event in rejected.evidence["events"]))
+
+    def test_existing_required_source_still_needs_current_retention_approval(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/private/tmp" if sys.platform == "darwin" else None) as folder:
+            active_binding = binding(locator=folder)
+            first_adapter = ObsidianAdapter()
+            first_adapter.resolve_binding(active_binding)
+            first_adapter.create_skeleton(active_binding)
+            approved = IntakeRequest(
+                TASK_ID,
+                active_binding,
+                "资料.pdf",
+                b"pdf",
+                "资料",
+                original_retention_approved=True,
+                page_evidence_mode="required",
+            )
+            with mock.patch(
+                "shared.stage5_intake.convert_to_markdown",
+                return_value=MarkdownConversion("# PDF\n", "markitdown", "0.1.6"),
+            ), mock.patch("shared.stage5_intake.render_page_evidence", return_value=rendered()):
+                first = Stage5Intake(first_adapter).execute(approved)
+            self.assertEqual((first.status, first.code), ("registered", None))
+            fresh_adapter = ObsidianAdapter()
+            fresh_adapter.resolve_binding(active_binding)
+            with mock.patch(
+                "shared.stage5_intake.convert_to_markdown",
+                side_effect=AssertionError("approval gate must run before conversion or reuse"),
+            ), mock.patch(
+                "shared.stage5_intake.render_page_evidence",
+                side_effect=AssertionError("approval gate must run before rendering"),
+            ):
+                rejected = Stage5Intake(fresh_adapter).execute(
+                    IntakeRequest(TASK_ID, active_binding, "资料.pdf", b"pdf", "资料", page_evidence_mode="required")
+                )
+            self.assertEqual((rejected.status, rejected.code), ("exception", "privacy_approval_required"))
+            self.assertEqual(rejected.evidence["page_evidence"], {"mode": "required", "status": "approval_required"})
+
+    def test_existing_required_source_cannot_bypass_approval_by_requesting_off(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/private/tmp" if sys.platform == "darwin" else None) as folder:
+            active_binding = binding(locator=folder)
+            first_adapter = ObsidianAdapter()
+            first_adapter.resolve_binding(active_binding)
+            first_adapter.create_skeleton(active_binding)
+            approved = IntakeRequest(
+                TASK_ID,
+                active_binding,
+                "资料.pdf",
+                b"pdf",
+                "资料",
+                original_retention_approved=True,
+                page_evidence_mode="required",
+            )
+            with mock.patch(
+                "shared.stage5_intake.convert_to_markdown",
+                return_value=MarkdownConversion("# PDF\n", "markitdown", "0.1.6"),
+            ), mock.patch("shared.stage5_intake.render_page_evidence", return_value=rendered()):
+                first = Stage5Intake(first_adapter).execute(approved)
+            self.assertEqual((first.status, first.code), ("registered", None))
+
+            fresh_adapter = ObsidianAdapter()
+            fresh_adapter.resolve_binding(active_binding)
+            with mock.patch(
+                "shared.stage5_intake.convert_to_markdown",
+                side_effect=AssertionError("approval gate must run before reconversion"),
+            ), mock.patch(
+                "shared.stage5_intake.render_page_evidence",
+                side_effect=AssertionError("approval gate must run before rerendering"),
+            ):
+                rejected = Stage5Intake(fresh_adapter).execute(
+                    IntakeRequest(TASK_ID, active_binding, "资料.pdf", b"pdf", "资料")
+                )
+            self.assertEqual((rejected.status, rejected.code), ("exception", "privacy_approval_required"))
+            self.assertIsNone(rejected.record)
+            self.assertFalse(any(ref.object_kind == "source_page" for ref in rejected.refs))
+
+            approved_off_adapter = ObsidianAdapter()
+            approved_off_adapter.resolve_binding(active_binding)
+            with mock.patch(
+                "shared.stage5_intake.convert_to_markdown",
+                side_effect=AssertionError("approved existing source must not be reconverted"),
+            ), mock.patch(
+                "shared.stage5_intake.render_page_evidence",
+                side_effect=AssertionError("approved existing pages must not be rerendered"),
+            ):
+                reused = Stage5Intake(approved_off_adapter).execute(
+                    IntakeRequest(
+                        TASK_ID,
+                        active_binding,
+                        "资料.pdf",
+                        b"pdf",
+                        "资料",
+                        original_retention_approved=True,
+                    )
+                )
+            self.assertEqual((reused.status, reused.code), ("reused", None))
+            self.assertEqual(reused.record.page_evidence_mode, "required")
+            self.assertTrue(any(ref.object_kind == "source_page" for ref in reused.refs))
+
+    def test_reuse_rejects_page_manifest_with_wrong_source_identity(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/private/tmp" if sys.platform == "darwin" else None) as folder:
+            active_binding = binding(locator=folder)
+            first_adapter = ObsidianAdapter()
+            first_adapter.resolve_binding(active_binding)
+            first_adapter.create_skeleton(active_binding)
+            request = IntakeRequest(
+                TASK_ID,
+                active_binding,
+                "资料.pdf",
+                b"pdf",
+                "资料",
+                original_retention_approved=True,
+                page_evidence_mode="required",
+            )
+            with mock.patch(
+                "shared.stage5_intake.convert_to_markdown",
+                return_value=MarkdownConversion("# PDF\n", "markitdown", "0.1.6"),
+            ), mock.patch("shared.stage5_intake.render_page_evidence", return_value=rendered()):
+                first = Stage5Intake(first_adapter).execute(request)
+            readable = next((Path(folder) / "01-来源索引" / first.record.display_name).glob("*-可读版.md"))
+            content = readable.read_text(encoding="utf-8")
+            content = content.replace(
+                f'"source_id": "{first.source_id}"',
+                '"source_id": "SRC-000000000000000000000000"',
+                1,
+            )
+            readable.write_text(content, encoding="utf-8")
+            fresh_adapter = ObsidianAdapter()
+            fresh_adapter.resolve_binding(active_binding)
+            with mock.patch(
+                "shared.stage5_intake.convert_to_markdown",
+                side_effect=AssertionError("invalid manifest must fail before reconversion"),
+            ), mock.patch(
+                "shared.stage5_intake.render_page_evidence",
+                side_effect=AssertionError("invalid manifest must fail before rerendering"),
+            ):
+                rejected = Stage5Intake(fresh_adapter).execute(request)
+            self.assertEqual((rejected.status, rejected.code), ("exception", "readback_failed"))
+
+    def test_reuse_rejects_non_contiguous_page_number(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/private/tmp" if sys.platform == "darwin" else None) as folder:
+            active_binding = binding(locator=folder)
+            first_adapter = ObsidianAdapter()
+            first_adapter.resolve_binding(active_binding)
+            first_adapter.create_skeleton(active_binding)
+            request = IntakeRequest(
+                TASK_ID,
+                active_binding,
+                "资料.pdf",
+                b"pdf",
+                "资料",
+                original_retention_approved=True,
+                page_evidence_mode="required",
+            )
+            with mock.patch(
+                "shared.stage5_intake.convert_to_markdown",
+                return_value=MarkdownConversion("# PDF\n", "markitdown", "0.1.6"),
+            ), mock.patch("shared.stage5_intake.render_page_evidence", return_value=rendered()):
+                first = Stage5Intake(first_adapter).execute(request)
+            readable = next((Path(folder) / "01-来源索引" / first.record.display_name).glob("*-可读版.md"))
+            content = readable.read_text(encoding="utf-8")
+            content = content.replace('"page_number": 1', '"page_number": 2', 1)
+            readable.write_text(content, encoding="utf-8")
+            fresh_adapter = ObsidianAdapter()
+            fresh_adapter.resolve_binding(active_binding)
+            reused = Stage5Intake(fresh_adapter).execute(request)
+            self.assertEqual((reused.status, reused.code), ("exception", "readback_failed"))
 
 
 class PageEvidenceStorageTests(unittest.TestCase):
