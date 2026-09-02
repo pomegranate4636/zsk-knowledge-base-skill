@@ -18,8 +18,8 @@ sys.path.insert(0, str(ROOT / "skills"))
 
 from shared.contracts import PageArtifact, PageTextEvidence  # noqa: E402
 from shared import ocr_provider  # noqa: E402
-from shared.ocr_provider import OcrFailed, OcrResult, OcrUnavailable, TesseractOcrProvider  # noqa: E402
-from shared.page_text import OcrReviewRequired, build_page_text_evidence, extract_pptx_page_text  # noqa: E402
+from shared.ocr_provider import AutoOcrProvider, OcrFailed, OcrResult, OcrUnavailable, TesseractOcrProvider  # noqa: E402
+from shared.page_text import build_page_text_evidence, extract_pptx_page_text  # noqa: E402
 from shared.page_renderer import RenderedPage  # noqa: E402
 
 
@@ -153,16 +153,31 @@ class PageTextEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence[1].text_source, "ocr")
         self.assertEqual(evidence[1].review_status, "auto_verified")
 
-    def test_low_confidence_ocr_stops_without_review(self) -> None:
-        with self.assertRaises(OcrReviewRequired) as raised:
-            build_page_text_evidence(
-                SOURCE_ID,
-                ".pptx",
-                pptx_payload(),
-                (page(1, PNG_1), page(2, PNG_2)),
-                FakeOcr(0.42),
-            )
-        self.assertEqual(raised.exception.page_numbers, (2,))
+    def test_low_confidence_ocr_is_marked_unverified_without_requesting_human_review(self) -> None:
+        evidence = build_page_text_evidence(
+            SOURCE_ID,
+            ".pptx",
+            pptx_payload(),
+            (page(1, PNG_1), page(2, PNG_2)),
+            FakeOcr(0.42),
+        )[1]
+        self.assertEqual(evidence.review_status, "review_required")
+        self.assertEqual(evidence.verbatim_text, "")
+
+    def test_automatic_ocr_accepts_agreeing_local_passes(self) -> None:
+        provider = AutoOcrProvider((FakeOcr(0.96), FakeOcr(0.91)))
+        result = provider.recognize(PNG_1)
+        self.assertEqual(result.text, "图片中的文字")
+        self.assertEqual(result.confidence, 0.91)
+
+    def test_automatic_ocr_rejects_disagreeing_local_passes(self) -> None:
+        class DifferentOcr(FakeOcr):
+            def recognize(self, image: bytes) -> OcrResult:
+                self.calls.append(image)
+                return OcrResult("另一段文字", self.confidence, self.name)
+
+        result = AutoOcrProvider((FakeOcr(0.99), DifferentOcr(0.99))).recognize(PNG_1)
+        self.assertEqual(result.confidence, 0.0)
 
     def test_reviewed_correction_is_hashed_with_page_image(self) -> None:
         evidence = build_page_text_evidence(

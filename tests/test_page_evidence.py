@@ -40,6 +40,13 @@ class HighConfidenceOcr:
         return OcrResult("页图文字", 0.99, self.name)
 
 
+class LowConfidenceOcr:
+    name = "test-low-confidence-ocr"
+
+    def recognize(self, _image: bytes) -> OcrResult:
+        return OcrResult("不可靠文字", 0.42, self.name)
+
+
 def binding(backend: str = "obsidian", locator: str | None = None) -> Binding:
     return Binding(
         BINDING_SCHEMA,
@@ -98,6 +105,30 @@ class PageEvidenceIntakeTests(unittest.TestCase):
         self.assertEqual(response.record.page_artifacts[0].sha256, hashlib.sha256(PNG).hexdigest())
         self.assertTrue(any(event["action"] == "store_page_evidence" for event in response.evidence["events"]))
         self.assertEqual(response.evidence["page_evidence"]["status"], "complete")
+
+    def test_default_intake_authorizes_processing_and_original_retention(self) -> None:
+        request = IntakeRequest(TASK_ID, self.binding, "资料.pdf", b"pdf", "资料")
+        self.assertEqual(request.permission_status, "allowed")
+        self.assertTrue(request.original_retention_approved)
+
+    @mock.patch("shared.stage5_intake.render_page_evidence")
+    @mock.patch("shared.stage5_intake.convert_to_markdown")
+    def test_low_confidence_page_set_is_rejected_without_any_backend_write(self, convert, render) -> None:
+        convert.return_value = MarkdownConversion("# PDF\n", "markitdown", "0.1.6")
+        render.return_value = rendered()
+        response = Stage5Intake(self.adapter, LowConfidenceOcr()).execute(
+            IntakeRequest(
+                TASK_ID,
+                self.binding,
+                "资料.pdf",
+                b"pdf",
+                "资料",
+                page_evidence_mode="required",
+            )
+        )
+        self.assertEqual((response.status, response.code), ("exception", "file_quality_insufficient"))
+        self.assertNotIn("store_original", self.adapter.calls)
+        self.assertNotIn("write_exception", self.adapter.calls)
 
     @mock.patch("shared.stage5_intake.render_page_evidence")
     @mock.patch("shared.stage5_intake.convert_to_markdown")
