@@ -152,11 +152,20 @@ def renderer_status(suffix: str) -> tuple[bool, tuple[str, ...]]:
     return not missing, missing
 
 
-def render_page_evidence(payload: bytes, suffix: str, source_id: str, work_root: Path) -> RenderedPages:
+def render_page_evidence(
+    payload: bytes,
+    suffix: str,
+    source_id: str,
+    work_root: Path,
+    *,
+    dpi: int = 144,
+) -> RenderedPages:
     """在调用方的私有临时目录内渲染完整页集并返回内容寻址结果。"""
     suffix = suffix.lower()
     if suffix not in {".pdf", ".pptx"}:
         raise PageRenderFailed("page evidence only supports PDF and PPTX")
+    if not 72 <= dpi <= 400:
+        raise PageRenderFailed("page evidence DPI is outside the supported range")
     ready, missing = renderer_status(suffix)
     if not ready:
         raise PageRendererUnavailable("missing page renderer: " + ", ".join(missing))
@@ -177,7 +186,7 @@ def render_page_evidence(payload: bytes, suffix: str, source_id: str, work_root:
     pdftoppm = _find_dependency("pdftoppm")
     assert pdftoppm is not None
     _run(
-        (pdftoppm, "-png", "-r", "144", str(pdf), str(source_root / "page")),
+        (pdftoppm, "-png", "-r", str(dpi), str(pdf), str(source_root / "page")),
         timeout=300,
         failure="page rendering failed",
     )

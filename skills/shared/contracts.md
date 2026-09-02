@@ -8,7 +8,7 @@
 - `BindingRegistry`：`zsk-registry-v1` 的进程内 Registry；Fake Adapter 首次成功解析后锁定单一绑定，后续不同主体、客户或定位符不切换上下文。
 - `SourceRecord`：内容寻址 `source_id`、客户绑定、人类可读展示名、标题、中性来源角色、内容类型、原件/可读版 SHA256、隐私状态、权限状态、原件保存授权、版本关系、处理状态和后端对象引用；需要完整页证据时，还保存页数、连续页图清单和连续页文字证据。
 - `PageArtifact`：完整页面证据，保存 `source_id`、页码、稳定文件名、像素尺寸和页图 SHA256。
-- `PageTextEvidence`：同页原生文字、本地 OCR、校对正文、置信度、审核状态和绑定页图 SHA256 的证据哈希；低置信且未校对时不得暴露为已核验原文。
+- `PageTextEvidence`：同页原生文字、本地 OCR、自动验证正文、置信度、审核状态和绑定页图 SHA256 的证据哈希；未通过自动验证时不得暴露为已核验原文，来源登记流程会零写入停止。
 - `KnowledgeFact`：知识卡中的单条事实、来源页码、逐字原文和页文字证据 SHA256；四者必须共同出现并通过 SourceRecord 校验。
 - `PrivacyDecision`：`zsk-privacy-v1`、隐私状态、权限状态和安全说明；安全说明不替代敏感正文。
 - `RouteDecision`：`03`、`04`、`05`、`indexed_only` 或 `02`，附人能看懂的原因和可选原因码。不使用数字评分。

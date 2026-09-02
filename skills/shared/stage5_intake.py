@@ -18,7 +18,7 @@ from .markdown_converter import ConversionFailed, ConverterUnavailable, Markdown
 from .naming import human_source_label, page_file_name
 from .page_renderer import PageRenderFailed, PageRendererUnavailable, RenderedPage, render_page_evidence
 from .ocr_provider import LocalOcrProvider, OcrFailed, OcrUnavailable
-from .page_text import OcrReviewRequired, PageTextFailed, build_page_text_evidence
+from .page_text import PageTextFailed, build_page_text_evidence
 
 
 SUPPORTED_SUFFIXES = frozenset({".md", ".txt", ".csv", ".json", ".html", ".htm", ".docx", ".pptx", ".xlsx", ".pdf"})
@@ -35,7 +35,7 @@ _SAFE_NOTES = {
     "page_evidence_failed": "完整页证据生成或校验失败，未报告登记成功。",
     "ocr_unavailable": "当前电脑缺少本地 OCR Provider，图片页未进入知识库。",
     "ocr_failed": "本地 OCR 执行失败，图片页未进入知识库。",
-    "ocr_review_required": "存在低置信 OCR 页面，完成校对前不登记正文或知识卡。",
+    "file_quality_insufficient": "资料文字无法被本机自动可靠还原，未写入知识库。",
     "permission_denied": "资料处理权未获允许，未保存原件或正文。",
     "ownership_unknown": "资料归属尚未确认，未保存原件或正文。",
     "privacy_approval_required": "检测到敏感信息，尚未取得原件保存授权。",
@@ -46,8 +46,6 @@ _SAFE_NOTES = {
 }
 _QUESTIONS = {
     "privacy_approval_required": "是否允许在该私有知识库中保存敏感原件？",
-    "ownership_unknown": "请确认该资料的归属和处理权。",
-    "permission_denied": "请确认是否允许处理该资料。",
     "version_conflict": "请确认它是否为已有来源的新版本。",
 }
 
@@ -61,7 +59,7 @@ class IntakeRequest:
     source_title: str
     source_role: str = "unknown"
     permission_status: str = "allowed"
-    original_retention_approved: bool = False
+    original_retention_approved: bool = True
     stable_source_locator: str | None = None
     confirmed_version_of: str | None = None
     page_evidence_mode: str = "off"
@@ -154,7 +152,7 @@ class Stage5Intake:
                 return self._exception(request.binding, source_id, "page_evidence_failed", evidence)
             try:
                 with tempfile.TemporaryDirectory(prefix="zsk-page-evidence-") as folder:
-                    rendered = render_page_evidence(request.payload, suffix, source_id, Path(folder))
+                    rendered = render_page_evidence(request.payload, suffix, source_id, Path(folder), dpi=300)
             except PageRendererUnavailable:
                 evidence["page_evidence"] = {"mode": "required", "status": "unavailable"}
                 return self._exception(request.binding, source_id, "page_evidence_unavailable", evidence)
@@ -187,12 +185,14 @@ class Stage5Intake:
             except OcrFailed:
                 evidence["page_text_evidence"] = {"status": "ocr_failed"}
                 return self._exception(request.binding, source_id, "ocr_failed", evidence)
-            except OcrReviewRequired as exc:
-                evidence["page_text_evidence"] = {"status": "review_required", "page_numbers": list(exc.page_numbers)}
-                return self._exception(request.binding, source_id, "ocr_review_required", evidence)
             except PageTextFailed:
                 evidence["page_text_evidence"] = {"status": "failed"}
                 return self._exception(request.binding, source_id, "page_evidence_failed", evidence)
+            unverified_pages = [item.page_number for item in page_text_evidence if item.review_status == "review_required"]
+            if unverified_pages:
+                evidence["page_text_evidence"] = {"status": "quality_insufficient", "page_numbers": unverified_pages}
+                evidence.update({"status": "exception", "code": "file_quality_insufficient"})
+                return IntakeResponse("exception", "file_quality_insufficient", source_id, (), None, evidence)
             evidence["page_text_evidence"] = {
                 "status": "verified",
                 "page_count": len(page_text_evidence),

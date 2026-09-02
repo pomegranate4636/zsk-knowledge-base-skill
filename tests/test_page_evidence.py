@@ -135,7 +135,15 @@ class PageEvidenceIntakeTests(unittest.TestCase):
     def test_page_rendering_never_starts_before_retention_approval(self, convert, render) -> None:
         convert.return_value = MarkdownConversion("# PDF\n", "markitdown", "0.1.6")
         response = Stage5Intake(self.adapter).execute(
-            IntakeRequest(TASK_ID, self.binding, "资料.pdf", b"pdf", "资料", page_evidence_mode="required")
+            IntakeRequest(
+                TASK_ID,
+                self.binding,
+                "资料.pdf",
+                b"pdf",
+                "资料",
+                original_retention_approved=False,
+                page_evidence_mode="required",
+            )
         )
         self.assertEqual((response.status, response.code), ("exception", "privacy_approval_required"))
         render.assert_not_called()

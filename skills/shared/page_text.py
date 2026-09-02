@@ -11,18 +11,12 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 from .contracts import PageTextEvidence
-from .ocr_provider import LocalOcrProvider, OcrFailed, OcrUnavailable, default_local_ocr_provider
+from .ocr_provider import LocalOcrProvider, OcrFailed, OcrUnavailable, default_auto_ocr_provider
 from .page_renderer import RenderedPage
 
 
 class PageTextFailed(ValueError):
     pass
-
-
-class OcrReviewRequired(ValueError):
-    def __init__(self, page_numbers: tuple[int, ...]) -> None:
-        super().__init__("OCR review is required for low-confidence pages")
-        self.page_numbers = page_numbers
 
 
 @dataclass(frozen=True)
@@ -108,7 +102,6 @@ def build_page_text_evidence(
         raise PageTextFailed("OCR correction refers to an unknown page")
 
     evidence: list[PageTextEvidence] = []
-    review_required: list[int] = []
     active_provider = provider
     for page_input, rendered in zip(page_inputs, rendered_pages, strict=True):
         native = page_input.native_text
@@ -119,7 +112,7 @@ def build_page_text_evidence(
         verbatim = native
         if page_input.requires_ocr:
             if active_provider is None:
-                active_provider = default_local_ocr_provider()
+                active_provider = default_auto_ocr_provider()
             try:
                 result = active_provider.recognize(rendered.payload)
             except OcrUnavailable:
@@ -139,7 +132,6 @@ def build_page_text_evidence(
             else:
                 verbatim = ""
                 status = "review_required"
-                review_required.append(page_input.page_number)
         evidence.append(
             PageTextEvidence.create(
                 source_id,
@@ -153,6 +145,4 @@ def build_page_text_evidence(
                 review_status=status,
             )
         )
-    if review_required:
-        raise OcrReviewRequired(tuple(review_required))
     return tuple(evidence)

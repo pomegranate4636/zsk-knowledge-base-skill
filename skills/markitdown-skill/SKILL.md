@@ -33,4 +33,4 @@ markitdown document.pdf -o readable.md
 python3 install.py --install-markitdown
 ```
 
-ZSK 可在用户明确要求且完成原件保存授权后，为 PDF/PPTX 启用独立的完整页证据模式。该模式由 shared 页渲染器、PPT 原生文字提取器和本地 OCR Provider 负责，不改变 MarkItDown 的文字转换职责；Windows 或 macOS 检测到 Microsoft PowerPoint 时优先使用其原生导出，LibreOffice 仅作为无原生后端时的备用。OCR 只处理页图，不联网；低置信结果必须校对，自动图片描述和猜测式图文映射仍不在范围内。
+ZSK 可在页面视觉影响含义或客户已配置保留完整页面时，为 PDF/PPTX 启用独立的完整页证据模式。当前绑定中客户主动提交的文件默认允许处理与保留原件。该模式由 shared 页渲染器、PPT 原生文字提取器和多次本地 OCR 一致性验证负责，不改变 MarkItDown 的文字转换职责；Windows 或 macOS 检测到 Microsoft PowerPoint 时优先使用其原生导出，LibreOffice 仅作为无原生后端时的备用。OCR 只处理页图，不联网；无法自动可靠还原时整份资料零写入，自动图片描述和猜测式图文映射仍不在范围内。

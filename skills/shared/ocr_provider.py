@@ -9,7 +9,8 @@ import platform
 import shutil
 import subprocess
 import tempfile
-from typing import Protocol
+from difflib import SequenceMatcher
+from typing import Protocol, Sequence
 
 
 class OcrUnavailable(RuntimeError):
@@ -42,12 +43,20 @@ class TesseractOcrProvider:
 
     name = "tesseract-local"
 
-    def __init__(self, executable: str | None = None, languages: str = "chi_sim+eng") -> None:
+    def __init__(
+        self,
+        executable: str | None = None,
+        languages: str = "chi_sim+eng",
+        page_segmentation_mode: int | None = None,
+    ) -> None:
         self.executable = executable or _tesseract_executable() or ""
         self.languages = languages
+        self.page_segmentation_mode = page_segmentation_mode
         self.tessdata_directory = _tessdata_directory()
         if not self.executable:
             raise OcrUnavailable("tesseract executable is unavailable")
+        if page_segmentation_mode is not None and not 0 <= page_segmentation_mode <= 13:
+            raise ValueError("Tesseract page segmentation mode is invalid")
 
     def recognize(self, image: bytes) -> OcrResult:
         if not image:
@@ -59,6 +68,8 @@ class TesseractOcrProvider:
                 command = [self.executable, str(path), "stdout", "-l", self.languages]
                 if self.tessdata_directory is not None:
                     command.extend(("--tessdata-dir", str(self.tessdata_directory)))
+                if self.page_segmentation_mode is not None:
+                    command.extend(("--psm", str(self.page_segmentation_mode)))
                 command.append("tsv")
                 completed = subprocess.run(
                     tuple(command),
@@ -100,6 +111,65 @@ class TesseractOcrProvider:
 
 def default_local_ocr_provider() -> LocalOcrProvider:
     return TesseractOcrProvider()
+
+
+class AutoOcrProvider:
+    """用多次本地 OCR 的一致性决定自动可用文字，不调用托管服务。"""
+
+    name = "auto-local-ocr"
+
+    def __init__(
+        self,
+        providers: Sequence[LocalOcrProvider] | None = None,
+        *,
+        agreement_threshold: float = 0.92,
+    ) -> None:
+        if not 0.0 <= agreement_threshold <= 1.0:
+            raise ValueError("OCR agreement threshold is invalid")
+        self.providers = tuple(providers or tuple(TesseractOcrProvider(page_segmentation_mode=mode) for mode in (3, 6, 11)))
+        if len(self.providers) < 2:
+            raise ValueError("automatic OCR requires at least two local passes")
+        self.agreement_threshold = agreement_threshold
+
+    def recognize(self, image: bytes) -> OcrResult:
+        candidates: list[OcrResult] = []
+        for provider in self.providers:
+            try:
+                result = provider.recognize(image)
+            except (OcrUnavailable, OcrFailed):
+                continue
+            if result.text.strip():
+                candidates.append(result)
+        if not candidates:
+            raise OcrFailed("all local OCR passes failed")
+
+        ranked = sorted(candidates, key=lambda item: item.confidence, reverse=True)
+        best_pair: tuple[OcrResult, OcrResult] | None = None
+        best_score = -1.0
+        for index, first in enumerate(ranked):
+            for second in ranked[index + 1 :]:
+                agreement = _text_agreement(first.text, second.text)
+                score = min(first.confidence, second.confidence) * agreement
+                if agreement >= self.agreement_threshold and score > best_score:
+                    best_pair = (first, second)
+                    best_score = score
+        if best_pair is None:
+            return OcrResult(ranked[0].text, 0.0, self.name)
+        first, second = best_pair
+        chosen = first if first.confidence >= second.confidence else second
+        return OcrResult(chosen.text, min(first.confidence, second.confidence), self.name)
+
+
+def default_auto_ocr_provider() -> LocalOcrProvider:
+    return AutoOcrProvider()
+
+
+def _text_agreement(first: str, second: str) -> float:
+    normalized_first = "".join(first.split())
+    normalized_second = "".join(second.split())
+    if not normalized_first or not normalized_second:
+        return 0.0
+    return SequenceMatcher(a=normalized_first, b=normalized_second).ratio()
 
 
 def _tesseract_executable() -> str | None:
