@@ -8,6 +8,7 @@
 | --- | --- |
 | 客户提交普通资料 | 默认请求具有 `allowed` 处理状态和原件保留授权。 |
 | 客户提交图片型 PDF/PPTX | 系统以 300 DPI 渲染，并用三次本地 OCR 的一致性验证文字。 |
+| 客户提交带真实文字层的 PDF | 系统优先逐页使用有效内嵌文字；模板占位或空白文字不作为可信正文。 |
 | 自动验证不能可靠还原任一页 | 返回 `file_quality_insufficient`，不写 01、02、03、04 或 05。 |
 
 ## RED / GREEN 检查点
@@ -15,6 +16,7 @@
 | 阶段 | RED 证据 | GREEN 证据 | 检查点 |
 | --- | --- | --- | --- |
 | 自动质量 Gate | 新测试导入 `AutoOcrProvider` 失败；默认原件保留断言失败；低置信页仍返回旧的 `privacy_approval_required`/校对路径。 | `py -X utf8 -m unittest tests.test_page_text_evidence tests.test_page_evidence`：31 项通过。 | RED `69acf9e`; GREEN `fix: enforce automatic OCR quality gate`（本提交） |
+| PDF 原生文字优先 | 新增测试因 `extract_pdf_page_text` 不存在而失败。 | `py -X utf8 -m unittest tests.test_page_text_evidence tests.test_page_evidence`：33 项通过。 | RED `test: cover PDF native text intake`；GREEN `fix: prefer PDF native text evidence` |
 
 ## 实现与验证
 

@@ -31,6 +31,7 @@ _A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 _P = "http://schemas.openxmlformats.org/presentationml/2006/main"
 _R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _PKG_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
+_PDF_TEMPLATE_PLACEHOLDER = re.compile(r"(?:空白演示|单击输入您的(?:封面)?副标题|单击输入您的标题)")
 
 
 def _clean_text(parts: list[str]) -> str:
@@ -66,6 +67,29 @@ def extract_pptx_page_text(payload: bytes) -> tuple[PptxPageText, ...]:
     return tuple(pages)
 
 
+def extract_pdf_page_text(payload: bytes, expected_page_count: int) -> tuple[str, ...]:
+    """逐页读取 PDF 的真实文字层；提取失败时安全回退到该页 OCR。"""
+    if expected_page_count < 1:
+        raise PageTextFailed("PDF has no rendered pages")
+    try:
+        import pdfplumber
+
+        with pdfplumber.open(io.BytesIO(payload)) as document:
+            raw_pages = tuple(page.extract_text() or "" for page in document.pages)
+    except Exception:
+        return ("",) * expected_page_count
+    if len(raw_pages) != expected_page_count:
+        return ("",) * expected_page_count
+    return tuple(_usable_pdf_native_text(text) for text in raw_pages)
+
+
+def _usable_pdf_native_text(text: str) -> str:
+    normalized = _clean_text(text.splitlines())
+    if len(normalized) < 24 or _PDF_TEMPLATE_PLACEHOLDER.search(normalized):
+        return ""
+    return normalized
+
+
 def _merge_text(native: str, ocr: str) -> str:
     if not native:
         return ocr
@@ -92,7 +116,14 @@ def build_page_text_evidence(
     if suffix == ".pptx":
         page_inputs = extract_pptx_page_text(source_payload)
     elif suffix == ".pdf":
-        page_inputs = tuple(PptxPageText(page.artifact.page_number, "", True, True) for page in rendered_pages)
+        native_pages = tuple(
+            _usable_pdf_native_text(text)
+            for text in extract_pdf_page_text(source_payload, len(rendered_pages))
+        )
+        page_inputs = tuple(
+            PptxPageText(page.artifact.page_number, native, not bool(native), not bool(native))
+            for page, native in zip(rendered_pages, native_pages, strict=True)
+        )
     else:
         raise PageTextFailed("page text evidence only supports PDF and PPTX")
     if [item.page_number for item in page_inputs] != [item.artifact.page_number for item in rendered_pages]:
