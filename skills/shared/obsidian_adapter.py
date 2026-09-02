@@ -17,6 +17,7 @@ from .templates import ROOT_TITLES, root_content, root_object_kind, template_fin
 _RULE_KEYS = frozenset({"AGENTS", "README"})
 _SAFE_ORIGINAL_SUFFIXES = frozenset({".md", ".txt", ".csv", ".json", ".html", ".htm", ".docx", ".pptx", ".xlsx", ".pdf"})
 _ROOT_NAMES = {key: f"{ROOT_TITLES[key]}.md" if key in _RULE_KEYS else ROOT_TITLES[key] for key in ROOT_KEYS}
+_OBSIDIAN_CONTROL_DIRECTORIES = frozenset({".obsidian"})
 
 
 def _rule_body(content: str) -> str:
@@ -241,8 +242,18 @@ class ObsidianAdapter:
             entries = {entry.name: entry for entry in os.scandir(self._root)}
         except OSError:
             return (), (), AdapterResult.failed("readback_failed", "Target directory cannot be read safely.", blocked=True)
-        if set(entries) - set(_ROOT_NAMES.values()):
+        if set(entries) - set(_ROOT_NAMES.values()) - _OBSIDIAN_CONTROL_DIRECTORIES:
             return (), (), AdapterResult.failed("structure_conflict", "Target contains an unknown root object.", blocked=True)
+        for name in _OBSIDIAN_CONTROL_DIRECTORIES:
+            entry = entries.get(name)
+            if entry is None:
+                continue
+            try:
+                mode = entry.stat(follow_symlinks=False).st_mode
+            except OSError:
+                return (), (), AdapterResult.failed("readback_failed", "Obsidian control directory cannot be inspected safely.", blocked=True)
+            if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+                return (), (), AdapterResult.failed("structure_conflict", "Obsidian control directory type is invalid.", blocked=True)
         found: list[str] = []
         for key in ROOT_KEYS:
             entry = entries.get(_ROOT_NAMES[key])
