@@ -13,7 +13,7 @@ import tempfile
 from typing import Any
 
 from .adapter import KnowledgeBaseAdapter
-from .contracts import BINDING_SCHEMA, SOURCE_ROLES, SOURCE_SCHEMA, TASK_ID, BackendObjectRef, Binding, ExceptionRecord, PageArtifact, SourceRecord
+from .contracts import SOURCE_ROLES, SOURCE_SCHEMA, TASK_ID, BackendObjectRef, Binding, ExceptionRecord, PageArtifact, SourceRecord
 from .markdown_converter import ConversionFailed, ConverterUnavailable, MarkdownConversion, convert_to_markdown
 from .naming import human_source_label, page_file_name
 from .page_renderer import PageRenderFailed, PageRendererUnavailable, RenderedPage, render_page_evidence

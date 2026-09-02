@@ -9,7 +9,14 @@ from pathlib import Path
 import stat
 from typing import Any
 
-from .contracts import AdapterResult, BINDING_SCHEMA, ROOT_KEYS, TASK_ID, Binding
+from .contracts import BINDING_SCHEMA, ROOT_KEYS, TASK_ID, Binding
+from .content_source_contract import (
+    ContentSourceContractError,
+    build_base_manifest,
+    build_empty_profile_index,
+    write_feishu_base_contract,
+    write_obsidian_base_contract,
+)
 from .feishu_adapter import FeishuAdapter
 from .feishu_cli import CliResponse, CliRunner, SubprocessCliRunner
 from .obsidian_adapter import ObsidianAdapter
@@ -114,7 +121,18 @@ class FirstRunBootstrap:
         result = self._skeleton(ObsidianAdapter(), binding)
         if result.status != "created":
             return BootstrapResponse("blocked", result.code or "write_failed", "Vault 目录已创建，但知识库结构未完整创建。", {"backend": "obsidian", "name": name, "target": str(target)}, None, str(target), result.root_refs)
-        return BootstrapResponse("created", None, "知识库已创建，可以开始上传资料。", {"backend": "obsidian", "name": name, "target": str(target)}, None, str(target), result.root_refs)
+        try:
+            manifest = build_base_manifest(
+                client_id=binding.client_id,
+                knowledge_base_name=name,
+                backend="obsidian",
+                locator=str(target.resolve(strict=True)),
+            )
+            index = build_empty_profile_index(knowledge_base_id=manifest["knowledge_base_id"])
+            write_obsidian_base_contract(target, manifest, index)
+        except (OSError, ContentSourceContractError) as exc:
+            return BootstrapResponse("blocked", "write_failed", f"知识库结构已创建，但基础 Content 清单未完整写入：{exc}", {"backend": "obsidian", "name": name, "target": str(target)}, None, str(target), result.root_refs)
+        return BootstrapResponse("created", None, "知识库与基础自描述清单已创建，可以开始上传资料。", {"backend": "obsidian", "name": name, "target": str(target)}, None, str(target), result.root_refs)
 
     def _create_feishu(self, client_name: str, name: str) -> BootstrapResponse:
         data = {"name": name, "description": "由 ZSK 首次建库创建。", "open_sharing": "closed"}
@@ -130,7 +148,17 @@ class FirstRunBootstrap:
         result = self._skeleton(FeishuAdapter(self.runner), binding)
         if result.status != "created":
             return BootstrapResponse("blocked", result.code or "write_failed", "飞书空间已创建，但知识库结构未完整创建。", {"backend": "feishu", "name": name, "target": locator}, None, locator, result.root_refs)
-        return BootstrapResponse("created", None, "知识库已创建，可以开始上传资料。", {"backend": "feishu", "name": name, "target": locator}, None, locator, result.root_refs)
+        try:
+            write_feishu_base_contract(
+                self.runner,
+                space_id=space_id,
+                locator=locator,
+                client_id=binding.client_id,
+                knowledge_base_name=name,
+            )
+        except ContentSourceContractError as exc:
+            return BootstrapResponse("blocked", "write_failed", f"飞书结构已创建，但基础 Content 清单未完整写入：{exc}", {"backend": "feishu", "name": name, "target": locator}, None, locator, result.root_refs)
+        return BootstrapResponse("created", None, "知识库与基础自描述清单已创建，可以开始上传资料。", {"backend": "feishu", "name": name, "target": locator}, None, locator, result.root_refs)
 
     def _feishu_name_exists(self, name: str) -> bool | None:
         response = self.runner.run(("lark-cli", "--as", "user", "wiki", "spaces", "list", "--page-all", "--format", "json"))

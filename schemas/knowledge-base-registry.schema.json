@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/slbb1995/zsk-knowledge-base-skill/schemas/knowledge-base-registry.schema.json",
+  "title": "Content Knowledge Base Registry v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "bindings", "workflow_defaults", "revision"],
+  "properties": {
+    "contract_version": {"const": "content-source-v1"},
+    "bindings": {
+      "type": "object",
+      "patternProperties": {
+        "^BND-[A-F0-9]{16}$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["binding_id", "client_id", "knowledge_base_id", "backend", "locator", "manifest_ref", "profile_index_ref", "supported_workflows", "workflow_defaults", "status"],
+          "properties": {
+            "binding_id": {"type": "string", "pattern": "^BND-[A-F0-9]{16}$"},
+            "client_id": {"type": "string", "minLength": 3},
+            "knowledge_base_id": {"type": "string", "pattern": "^KB-[A-F0-9]{16}$"},
+            "backend": {"enum": ["obsidian", "feishu"]},
+            "locator": {"type": "object", "minProperties": 1},
+            "manifest_ref": {"type": "string", "minLength": 1},
+            "profile_index_ref": {"type": "string", "minLength": 1},
+            "supported_workflows": {"type": "array", "uniqueItems": true, "items": {"enum": ["content-koubo-slim", "content-gzh-slim"]}},
+            "workflow_defaults": {"type": "object"},
+            "status": {"enum": ["active", "disabled"]}
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "workflow_defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "content-koubo-slim": {"type": "string", "pattern": "^BND-[A-F0-9]{16}$"},
+        "content-gzh-slim": {"type": "string", "pattern": "^BND-[A-F0-9]{16}$"}
+      }
+    },
+    "revision": {"type": "integer", "minimum": 1}
+  }
+}

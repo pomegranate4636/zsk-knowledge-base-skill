@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/slbb1995/zsk-knowledge-base-skill/schemas/content-source-manifest.schema.json",
+  "title": "Content Source Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "knowledge_base_id", "client_id", "knowledge_base_name", "backend", "locator", "asset_roots", "profile_index_ref", "workflow_outputs", "supported_workflows", "revision"],
+  "properties": {
+    "contract_version": {"const": "content-source-v1"},
+    "knowledge_base_id": {"type": "string", "pattern": "^KB-[A-F0-9]{16}$"},
+    "client_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$"},
+    "knowledge_base_name": {"type": "string", "minLength": 1},
+    "backend": {"enum": ["obsidian", "feishu"]},
+    "locator": {"type": "string", "minLength": 1},
+    "asset_roots": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["knowledge", "content", "profiles", "workflow", "output"],
+      "properties": {
+        "knowledge": {"type": "string", "minLength": 1},
+        "content": {"type": "string", "minLength": 1},
+        "profiles": {"type": "string", "minLength": 1},
+        "workflow": {"type": "string", "minLength": 1},
+        "output": {"type": "string", "minLength": 1}
+      }
+    },
+    "profile_index_ref": {"type": "string", "minLength": 1},
+    "workflow_outputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "content-koubo-slim": {"type": "string", "minLength": 1},
+        "content-gzh-slim": {"type": "string", "minLength": 1}
+      }
+    },
+    "supported_workflows": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"enum": ["content-koubo-slim", "content-gzh-slim"]}
+    },
+    "revision": {"type": "integer", "minimum": 1}
+  }
+}

@@ -72,7 +72,7 @@ class ContentKouboSlimContractTests(unittest.TestCase):
         self.assertIsNotNone(response.asset)
         body = response.asset.body
         self.assertIn(f"asset_id: {response.asset.asset_id}\n", body)
-        self.assertIn("type: oral_method_asset\n", body)
+        self.assertIn("type: content_method_asset\n", body)
         self.assertIn("status: active\n", body)
         self.assertIn("audience_scope: both\n", body)
         self.assertIn('keywords:\n  - "读者决策表达"\n', body)
@@ -80,6 +80,7 @@ class ContentKouboSlimContractTests(unittest.TestCase):
             'use_when:\n  - "把问题判断和行动连成短链"\n',
             body,
         )
+        self.assertIn("applicable_workflows:\n  - content-koubo-slim\n  - content-gzh-slim\n", body)
 
     def test_profile_has_one_active_primary_selector(self) -> None:
         source = self.source("主体资料.md", "profile_material")
@@ -102,7 +103,37 @@ class ContentKouboSlimContractTests(unittest.TestCase):
         self.assertIn("status: active\n", body)
         self.assertIn("is_primary: true\n", body)
         self.assertIn(f"profile_id: {response.primary.profile_id}\n", body)
-        self.assertIn("profile_schema: zsk-profile-primary-v1\n", body)
+        self.assertIn("profile_schema: zsk-profile-v2\n", body)
+
+    def test_two_active_profiles_are_allowed_and_primary_is_only_default(self) -> None:
+        source_a = self.source("主体甲.md", "profile_material")
+        source_b = self.source("主体乙.md", "profile_material")
+        stage = Stage8Profile(self.adapter)
+        first = stage.execute(
+            ProfileRequest(
+                TASK_ID,
+                self.binding,
+                source_a,
+                "主体甲",
+                ProfileLayers(("甲事实",), ("甲设定",), ("甲候选",)),
+                True,
+                ("甲老师",),
+            )
+        )
+        second = stage.execute(
+            ProfileRequest(
+                TASK_ID,
+                self.binding,
+                source_b,
+                "主体乙",
+                ProfileLayers(("乙事实",), ("乙设定",), ("乙候选",)),
+                False,
+            )
+        )
+        self.assertEqual(first.status, "registered")
+        self.assertEqual(second.status, "registered")
+        self.assertNotEqual(first.primary.profile_id, second.primary.profile_id)
+        self.assertIn("is_primary: false", second.primary.body())
 
     def test_feishu_visible_body_hides_bridge_frontmatter(self) -> None:
         body = (
