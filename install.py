@@ -24,15 +24,39 @@ COMPONENTS = (
 MARKITDOWN_SPEC = "markitdown[docx,pdf,pptx,xlsx]==0.1.6"
 MARKITDOWN_INSTALL_TIMEOUT_SECONDS = 600
 SHARED_REQUIRED_FILES = (
-    "markdown_converter.py",
-    "page_renderer.py",
-    "content_koubo_slim_handoff.py",
+    "__init__.py",
+    "adapter.py",
     "configure_content_koubo_slim.py",
-    "naming.py",
-    "page_text.py",
-    "ocr_provider.py",
-    "content_source_contract.py",
     "configure_content_source.py",
+    "content_koubo_slim_handoff.py",
+    "content_source_contract.py",
+    "contracts.md",
+    "contracts.py",
+    "evidence.py",
+    "fake_adapter.py",
+    "feishu_adapter.py",
+    "feishu_cli.py",
+    "feishu_stage5.py",
+    "markdown_converter.py",
+    "naming.py",
+    "obsidian_adapter.py",
+    "obsidian_stage6.py",
+    "ocr_provider.py",
+    "page_renderer.py",
+    "page_text.py",
+    "stage11_bootstrap.py",
+    "stage2_router.py",
+    "stage5_intake.py",
+    "stage6_knowledge.py",
+    "stage7_method.py",
+    "stage8_profile.py",
+    "templates.py",
+)
+PACKAGE_REQUIRED_FILES = ("README.md", "install.py", "requirements-markitdown.txt")
+PACKAGE_SCHEMA_FILES = (
+    "content-profile-index.schema.json",
+    "content-source-manifest.schema.json",
+    "knowledge-base-registry.schema.json",
 )
 MAC_POWERPOINT = Path("/Applications/Microsoft PowerPoint.app")
 WINDOWS_POWERPOINT_DETECTION_SCRIPT = (
@@ -59,6 +83,22 @@ def validate_source(source_root: Path) -> list[str]:
     for name in SHARED_REQUIRED_FILES:
         if not (source_root / "shared" / name).is_file():
             errors.append(f"缺少 shared 必需模块：shared/{name}")
+    return errors
+
+
+def validate_package(package_root: Path) -> list[str]:
+    errors: list[str] = []
+    for name in PACKAGE_REQUIRED_FILES:
+        if not (package_root / name).is_file():
+            errors.append(f"缺少安装包必需文件：{name}")
+    for name in PACKAGE_SCHEMA_FILES:
+        if not (package_root / "schemas" / name).is_file():
+            errors.append(f"缺少合同 Schema：schemas/{name}")
+    skills_root = package_root / "skills"
+    if not skills_root.is_dir():
+        errors.append("缺少安装包组件目录：skills")
+    else:
+        errors.extend(validate_source(skills_root))
     return errors
 
 
@@ -308,8 +348,21 @@ def main() -> int:
     parser.add_argument("--dest", type=Path, default=default_destination(), help="目标 Skills 目录")
     parser.add_argument("--check", action="store_true", help="只检查目标目录，不写入")
     parser.add_argument("--doctor", action="store_true", help="检查完整组件与 MarkItDown 转换器，不写入")
+    parser.add_argument("--package-check", action="store_true", help="检查当前安装包结构，不写入")
     parser.add_argument("--install-markitdown", action="store_true", help="安装或补齐 MarkItDown 最小格式依赖")
     args = parser.parse_args()
+
+    if args.package_check:
+        package_root = Path(__file__).resolve().parent
+        errors = validate_package(package_root)
+        print(f"检查安装包：{package_root}")
+        if errors:
+            print("安装包不完整：", file=sys.stderr)
+            for error in errors:
+                print(f"- {error}", file=sys.stderr)
+            return 1
+        print("安装包结构：完整")
+        return 0
 
     destination = args.dest.expanduser().resolve()
     if args.check:
