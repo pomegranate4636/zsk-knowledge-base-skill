@@ -393,7 +393,12 @@ class ContentKouboSlimHandoffTests(unittest.TestCase):
             root = Path(directory)
             vault = self.make_vault(root)
             linked = root / "linked-vault"
-            os.symlink(vault, linked)
+            try:
+                os.symlink(vault, linked)
+            except OSError as exc:
+                if getattr(exc, "winerror", None) == 1314:
+                    self.skipTest("Windows account cannot create symlinks")
+                raise
             registry, runs = self.targets(root)
             with self.assertRaisesRegex(ContentKouboSlimHandoffError, "软链接"):
                 configure_content_koubo_slim_handoff(
