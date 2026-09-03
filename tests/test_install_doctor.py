@@ -59,6 +59,16 @@ class InstallDoctorTests(unittest.TestCase):
             self.assertNotIn("shared", present)
             self.assertIn("shared", missing)
 
+    def test_shared_requires_content_source_contract_and_ocr_together(self) -> None:
+        self.assertTrue(
+            {
+                "content_source_contract.py",
+                "configure_content_source.py",
+                "page_text.py",
+                "ocr_provider.py",
+            }.issubset(install.SHARED_REQUIRED_FILES)
+        )
+
     @mock.patch.object(install.shutil, "which", return_value="tesseract.exe")
     @mock.patch.object(
         install.subprocess,

@@ -7,6 +7,13 @@ import re
 from typing import Any, Sequence
 from urllib.parse import urlsplit
 from .contracts import AdapterResult, AssetPayload, BackendObjectRef, Binding, ExceptionRecord, PageArtifact, SourceRecord, ROOT_KEYS
+from .content_source_contract import (
+    ContentSourceContractError,
+    _feishu_document_payload,
+    _merged_profile_index,
+    _profile_entry_from_asset,
+    validate_profile_index,
+)
 from .feishu_cli import CliRunner, SubprocessCliRunner
 from .feishu_stage5 import FeishuStage5Storage
 from .templates import ROOT_TITLES, root_content
@@ -161,14 +168,14 @@ class FeishuAdapter:
             return self._later_stage("write_knowledge_asset")
         storage, failure = self._stage5_storage(binding)
         source = failure or storage.registered_source(asset.source_id, "business_knowledge")
-        body = _visible_asset_body(asset.body)
+        body = asset.body.encode("utf-8")
         return source if source.status not in {"ok", "reused"} else self._remember_asset(storage.store_document(f"knowledge:{asset.asset_id}", asset.title, storage.root_nodes["03"], body, "knowledge_asset", "feishu://03"))
     def write_method_asset(self, binding: Binding, asset: AssetPayload) -> AdapterResult:
         if not isinstance(asset, AssetPayload):
             return self._later_stage("write_method_asset")
         storage, failure = self._stage5_storage(binding)
         source = failure or storage.registered_source(asset.source_id, "reference_method")
-        body = _visible_asset_body(asset.body)
+        body = asset.body.encode("utf-8")
         return source if source.status not in {"ok", "reused"} else self._remember_asset(storage.store_document(f"method:{asset.asset_id}", asset.title, storage.root_nodes["04"], body, "method_asset", "feishu://04"))
     def write_profile(self, binding: Binding, asset: AssetPayload) -> AdapterResult:
         if not isinstance(asset, AssetPayload):
@@ -176,7 +183,84 @@ class FeishuAdapter:
         storage, failure = self._stage5_storage(binding)
         source = failure or storage.registered_source(asset.source_id, "profile_material")
         body = _visible_asset_body(asset.body)
-        return source if source.status not in {"ok", "reused"} else self._remember_asset(storage.store_document(f"profile:{asset.asset_id}", asset.title, storage.root_nodes["05"], body, "profile", "feishu://05"))
+        if source.status not in {"ok", "reused"}:
+            return source
+        try:
+            state = self._profile_index_state(binding)
+            if state is not None:
+                _token, index = state
+                placeholder = _profile_entry_from_asset(asset, object_ref="pending-profile-ref", content_sha256=hashlib.sha256(body).hexdigest())
+                existing = [item for item in index["profiles"] if item["profile_id"] == placeholder["profile_id"]]
+                if existing:
+                    placeholder["object_ref"] = existing[0]["object_ref"]
+                _merged_profile_index(index, placeholder)
+        except ContentSourceContractError as exc:
+            return AdapterResult.failed("version_conflict", str(exc), blocked=True)
+        result = self._remember_asset(storage.store_document(f"profile:{asset.asset_id}", asset.title, storage.root_nodes["05"], body, "profile", "feishu://05"))
+        if result.status not in {"ok", "reused"} or state is None:
+            return result
+        try:
+            token, index = state
+            locator = result.object_refs[0].locator
+            object_ref = locator.removeprefix("feishu://doc/")
+            if object_ref == locator or not object_ref:
+                raise ContentSourceContractError("written Feishu Profile has no stable object ref")
+            entry = _profile_entry_from_asset(asset, object_ref=object_ref, content_sha256=hashlib.sha256(body).hexdigest())
+            updated = _merged_profile_index(index, entry)
+            if updated != index:
+                payload = _feishu_document_payload("content-profile-index", updated)
+                _written, write_failure = self._json(self._doc_overwrite(token), "write_failed", stdin=payload)
+                if write_failure:
+                    raise ContentSourceContractError("Profile index update failed")
+                fetched, fetch_failure = self._json(self._doc_fetch(token), "readback_failed")
+                document = fetched.get("document") if isinstance(fetched, dict) else None
+                if fetch_failure or not isinstance(document, dict) or str(document.get("content", "")).strip() != payload.strip():
+                    raise ContentSourceContractError("Profile index readback mismatch")
+        except ContentSourceContractError as exc:
+            return AdapterResult.failed("readback_failed", f"Profile 已写入，但索引未通过回读：{exc}", blocked=True)
+        return result
+
+    def _profile_index_state(self, binding: Binding) -> tuple[str, dict[str, Any]] | None:
+        guard = self._binding_guard(binding)
+        if guard:
+            raise ContentSourceContractError(guard.detail or "binding is unavailable")
+        if "06" not in self._roots:
+            raise ContentSourceContractError("06 root is unavailable")
+        target = self._target
+        assert target is not None
+        argv = (
+            "lark-cli", "--as", "user", "wiki", "nodes", "list", "--space-id", target.space_id,
+            "--parent-node-token", self._roots["06"].node_token, "--page-all", "--format", "json",
+        )
+        data, failure = self._json(argv, "readback_failed")
+        if failure:
+            raise ContentSourceContractError(failure.detail or "06 children cannot be listed")
+        items = data.get("items") or []
+        if not isinstance(items, list):
+            raise ContentSourceContractError("06 child list is invalid")
+        manifest_matches = [item for item in items if isinstance(item, dict) and item.get("title") == "content-source-manifest"]
+        index_matches = [item for item in items if isinstance(item, dict) and item.get("title") == "content-profile-index"]
+        if not manifest_matches and not index_matches:
+            return None
+        if len(manifest_matches) != 1 or len(index_matches) != 1:
+            raise ContentSourceContractError("base Content contract is incomplete or duplicated")
+        token = index_matches[0].get("obj_token")
+        if not isinstance(token, str) or not token:
+            raise ContentSourceContractError("Profile index has no stable object token")
+        fetched, fetch_failure = self._json(self._doc_fetch(token), "readback_failed")
+        document = fetched.get("document") if isinstance(fetched, dict) else None
+        content = document.get("content") if isinstance(document, dict) else None
+        if fetch_failure or not isinstance(content, str):
+            raise ContentSourceContractError("Profile index cannot be read")
+        match = re.search(r"```json\s*([\s\S]*?)\s*```", content)
+        if not match:
+            raise ContentSourceContractError("Profile index JSON block is missing")
+        try:
+            index = json.loads(match.group(1))
+        except json.JSONDecodeError as exc:
+            raise ContentSourceContractError("Profile index JSON is invalid") from exc
+        validate_profile_index(index)
+        return token, index
 
     def read_back(self, binding: Binding, refs: Sequence[BackendObjectRef] | None = None) -> AdapterResult:
         guard = self._binding_guard(binding)

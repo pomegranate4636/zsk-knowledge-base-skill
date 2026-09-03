@@ -113,9 +113,15 @@ class KnowledgePageEvidenceTests(unittest.TestCase):
         )
         self.assertEqual((response.status, response.code), ("registered", None))
         assert response.asset is not None
+        self.assertIn(f"asset_id: {response.asset.asset_id}\n", response.asset.body)
+        self.assertIn("type: business_knowledge_asset\n", response.asset.body)
+        self.assertIn("status: confirmed\n", response.asset.body)
+        self.assertIn("applicable_workflows:\n  - content-koubo-slim\n  - content-gzh-slim\n", response.asset.body)
         self.assertIn("第 1 页", response.asset.body)
         self.assertIn("原文事实", response.asset.body)
         self.assertIn(text.evidence_sha256, response.asset.body)
+        self.assertEqual(response.asset.metadata["status"], "confirmed")
+        self.assertEqual(len(response.asset.metadata["fact_evidence"]), 1)
 
 
 if __name__ == "__main__":

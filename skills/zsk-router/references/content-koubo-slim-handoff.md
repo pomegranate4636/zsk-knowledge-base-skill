@@ -2,6 +2,8 @@
 
 只在用户明确要把当前 ZSK Obsidian 知识库连接给 Content 口播 Slim 时读取。飞书知识库当前不能直接交接，因为 Content 口播 Slim 只读取本地文件。
 
+> 这是旧 `content-koubo-client-v2` 的兼容交接规则。新安装优先使用 `content-source-v1`；新合同支持同库多 IP，`primary` 只作为默认值。下面“恰好一份 active + primary”只约束旧 v2 Manifest，不约束新合同。
+
 ## 目标
 
 ZSK 负责生成 Content 口播 Slim 公开合同要求的 Manifest，并在当前宿主持久 Registry 中登记当前客户。Content 口播 Slim 不需要知道配置来自 ZSK。

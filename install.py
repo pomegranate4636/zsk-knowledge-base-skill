@@ -31,6 +31,8 @@ SHARED_REQUIRED_FILES = (
     "naming.py",
     "page_text.py",
     "ocr_provider.py",
+    "content_source_contract.py",
+    "configure_content_source.py",
 )
 MAC_POWERPOINT = Path("/Applications/Microsoft PowerPoint.app")
 WINDOWS_POWERPOINT_DETECTION_SCRIPT = (

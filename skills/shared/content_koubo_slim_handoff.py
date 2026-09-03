@@ -447,6 +447,7 @@ def _asset_counts(method_root: Path, profile_root: Path) -> tuple[int, int, int]
                 "peer_content_asset",
                 "oral_structure",
                 "oral_method_asset",
+                "content_method_asset",
             }
             and metadata.get("status") == "active"
             and metadata.get("audience_scope") in {
@@ -465,6 +466,11 @@ def _asset_counts(method_root: Path, profile_root: Path) -> tuple[int, int, int]
             and all(
                 isinstance(item, str) and bool(item.strip())
                 for item in metadata["use_when"]
+            )
+            and (
+                metadata.get("type") != "content_method_asset"
+                or isinstance(metadata.get("applicable_workflows"), list)
+                and "content-koubo-slim" in metadata["applicable_workflows"]
             )
         ):
             compatible += 1
