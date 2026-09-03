@@ -30,6 +30,20 @@ class InstallDoctorTests(unittest.TestCase):
     def test_source_requires_the_markdown_converter(self) -> None:
         self.assertEqual(install.validate_source(ROOT / "skills"), [])
 
+    def test_package_check_accepts_the_complete_repository(self) -> None:
+        self.assertEqual(install.validate_package(ROOT), [])
+
+    def test_package_check_reports_missing_contract_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            package_root = Path(folder)
+            (package_root / "README.md").write_text("# package\n", encoding="utf-8")
+            (package_root / "install.py").write_text("# installer\n", encoding="utf-8")
+            (package_root / "requirements-markitdown.txt").write_text("markitdown\n", encoding="utf-8")
+            (package_root / "skills").mkdir()
+            with mock.patch.object(install, "validate_source", return_value=[]):
+                errors = install.validate_package(package_root)
+            self.assertTrue(any("content-profile-index.schema.json" in error for error in errors))
+
     def test_shared_requires_the_page_renderer_module(self) -> None:
         self.assertTrue((ROOT / "skills" / "shared" / "page_renderer.py").is_file())
 
