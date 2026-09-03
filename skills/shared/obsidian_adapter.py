@@ -9,7 +9,7 @@ from pathlib import Path, PurePath
 import stat
 from typing import Sequence
 
-from .contracts import AdapterResult, AssetPayload, BackendObjectRef, Binding, ContractError, ExceptionRecord, PageArtifact, SourceRecord, ROOT_KEYS
+from .contracts import AdapterResult, AssetPayload, BackendObjectRef, Binding, ContractError, ExceptionRecord, PageArtifact, PageTextEvidence, SourceRecord, ROOT_KEYS
 from .content_source_contract import (
     ContentSourceContractError,
     preflight_obsidian_profile_index,
@@ -453,6 +453,7 @@ class ObsidianAdapter:
         if requested_page_evidence_mode == "required" and page_mode != "required":
             raise ContractError("page_evidence_failed", "Registered source has no complete page evidence.")
         page_artifacts: tuple[PageArtifact, ...] = ()
+        page_text_evidence: tuple[PageTextEvidence, ...] = ()
         page_refs: list[tuple[BackendObjectRef, Path]] = []
         if page_mode == "required":
             manifest = meta.get("page_manifest")
@@ -462,6 +463,14 @@ class ObsidianAdapter:
                 page_artifacts = tuple(PageArtifact(**item) for item in manifest)
             except (TypeError, ValueError):
                 raise ValueError("Registered page manifest is invalid.") from None
+            text_manifest = meta.get("page_text_manifest")
+            if text_manifest is not None:
+                if not isinstance(text_manifest, list) or len(text_manifest) != page_count:
+                    raise ValueError("Registered page text manifest is incomplete.")
+                try:
+                    page_text_evidence = tuple(PageTextEvidence(**item) for item in text_manifest)
+                except (TypeError, ValueError):
+                    raise ValueError("Registered page text manifest is invalid.") from None
             page_dir = source_dir / "pages"
             if not page_dir.is_dir():
                 page_dir = source_dir / "页面证据"
@@ -494,7 +503,7 @@ class ObsidianAdapter:
             "zsk-source-record-v1", source_id, binding.client_id, source_title, source_role, content_kind,
             original_name, original_sha256, hashlib.sha256(readable.read_bytes()).hexdigest(), privacy, permission,
             version_of, "reused", retained, {"original": original_ref, "readable": readable_ref},
-            page_mode, page_count, page_artifacts, display,
+            page_mode, page_count, page_artifacts, display, page_text_evidence,
         )
         return record, ((original_ref, original), (readable_ref, readable), *page_refs)
 

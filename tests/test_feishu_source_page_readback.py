@@ -106,6 +106,12 @@ class FeishuSourcePageReadbackTests(unittest.TestCase):
         tampered = stored.replace("校对正文", "被篡改正文")
         self.assertFalse(FeishuStage5Storage._matches_document("资料", payload, tampered))
 
+    def test_readable_body_reordering_is_detected(self) -> None:
+        payload = "甲方 支付 乙方".encode("utf-8")
+        stored = FeishuStage5Storage._document("资料", payload)
+        tampered = stored.replace("甲方 支付 乙方", "乙方 支付 甲方")
+        self.assertFalse(FeishuStage5Storage._matches_document("资料", payload, tampered))
+
     def test_readable_xml_with_element_ids_is_verified_semantically(self) -> None:
         payload = "## 页级校对正文\n\n校对正文".encode("utf-8")
         digest = hashlib.sha256(payload).hexdigest()
@@ -146,6 +152,15 @@ class FeishuSourcePageReadbackTests(unittest.TestCase):
         self.assertEqual(result.metadata["height_px"], 900)
         self.assertEqual(result.metadata["sha256"], PAGE_SHA)
         self.assertIn("media_sha256_readback", result.checked)
+        self.assertTrue(runner.exhausted)
+
+    def test_cached_readable_token_avoids_rescanning_all_source_documents_per_page(self) -> None:
+        record, page = source()
+        runner = RecordedCliRunner(calls(PNG)[2:])
+        storage = FeishuStage5Storage(runner, "1", {"01": "root-01", "02": "root-02"})
+        storage._doc_tokens[f"{record.source_id}:readable"] = "readable-token"
+        result = storage.store_page_evidence(record, page, PNG)
+        self.assertEqual(result.status, "ok")
         self.assertTrue(runner.exhausted)
 
     def test_remote_media_hash_mismatch_fails_closed(self) -> None:

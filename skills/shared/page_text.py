@@ -58,8 +58,16 @@ def extract_pptx_page_text(payload: bytes) -> tuple[PptxPageText, ...]:
             for number, path in enumerate(slide_paths, start=1):
                 root = ET.fromstring(archive.read(path))
                 native = _clean_text([item.text or "" for item in root.findall(f".//{{{_A}}}t")])
-                has_image = root.find(f".//{{{_P}}}pic") is not None
-                pages.append(PptxPageText(number, native, has_image, has_image))
+                graphic_uris = (
+                    str(item.attrib.get("uri", "")).lower()
+                    for item in root.findall(f".//{{{_A}}}graphicData")
+                )
+                has_visual = root.find(f".//{{{_P}}}pic") is not None or any(
+                    marker in uri
+                    for uri in graphic_uris
+                    for marker in ("chart", "diagram", "ole")
+                )
+                pages.append(PptxPageText(number, native, has_visual, has_visual or not bool(native)))
     except (KeyError, ET.ParseError, zipfile.BadZipFile, OSError) as exc:
         raise PageTextFailed("PPT native text cannot be extracted safely") from exc
     if not pages:
@@ -67,20 +75,30 @@ def extract_pptx_page_text(payload: bytes) -> tuple[PptxPageText, ...]:
     return tuple(pages)
 
 
-def extract_pdf_page_text(payload: bytes, expected_page_count: int) -> tuple[str, ...]:
-    """逐页读取 PDF 的真实文字层；提取失败时安全回退到该页 OCR。"""
+def extract_pdf_page_inputs(payload: bytes, expected_page_count: int) -> tuple[PptxPageText, ...]:
+    """读取 PDF 原生文字，并标记仍需从完整页图核验的视觉页。"""
     if expected_page_count < 1:
         raise PageTextFailed("PDF has no rendered pages")
     try:
         import pdfplumber
 
         with pdfplumber.open(io.BytesIO(payload)) as document:
-            raw_pages = tuple(page.extract_text() or "" for page in document.pages)
+            pages = tuple(document.pages)
+            if len(pages) != expected_page_count:
+                raise PageTextFailed("PDF native page count differs from rendered pages")
+            results: list[PptxPageText] = []
+            for number, page in enumerate(pages, start=1):
+                native = _usable_pdf_native_text(page.extract_text() or "")
+                has_visual = bool(page.images or page.curves or page.rects)
+                results.append(PptxPageText(number, native, has_visual, has_visual or not bool(native)))
     except Exception:
-        return ("",) * expected_page_count
-    if len(raw_pages) != expected_page_count:
-        return ("",) * expected_page_count
-    return tuple(_usable_pdf_native_text(text) for text in raw_pages)
+        return tuple(PptxPageText(number, "", True, True) for number in range(1, expected_page_count + 1))
+    return tuple(results)
+
+
+def extract_pdf_page_text(payload: bytes, expected_page_count: int) -> tuple[str, ...]:
+    """兼容只读取 PDF 原生文字的调用方。"""
+    return tuple(item.native_text for item in extract_pdf_page_inputs(payload, expected_page_count))
 
 
 def _usable_pdf_native_text(text: str) -> str:
@@ -116,14 +134,7 @@ def build_page_text_evidence(
     if suffix == ".pptx":
         page_inputs = extract_pptx_page_text(source_payload)
     elif suffix == ".pdf":
-        native_pages = tuple(
-            _usable_pdf_native_text(text)
-            for text in extract_pdf_page_text(source_payload, len(rendered_pages))
-        )
-        page_inputs = tuple(
-            PptxPageText(page.artifact.page_number, native, not bool(native), not bool(native))
-            for page, native in zip(rendered_pages, native_pages, strict=True)
-        )
+        page_inputs = extract_pdf_page_inputs(source_payload, len(rendered_pages))
     else:
         raise PageTextFailed("page text evidence only supports PDF and PPTX")
     if [item.page_number for item in page_inputs] != [item.artifact.page_number for item in rendered_pages]:

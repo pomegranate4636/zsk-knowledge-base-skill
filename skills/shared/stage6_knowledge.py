@@ -91,7 +91,7 @@ class Stage6Knowledge:
                 if (
                     page is None
                     or page.review_status == "review_required"
-                    or fact.verbatim_text != page.verbatim_text
+                    or fact.verbatim_text.strip() not in page.verbatim_text
                     or fact.evidence_sha256 != page.evidence_sha256
                 ):
                     return "evidence_incomplete"

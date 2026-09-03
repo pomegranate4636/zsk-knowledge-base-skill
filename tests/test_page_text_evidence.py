@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT / "skills"))
 from shared.contracts import PageArtifact, PageTextEvidence  # noqa: E402
 from shared import ocr_provider  # noqa: E402
 from shared.ocr_provider import AutoOcrProvider, OcrFailed, OcrResult, OcrUnavailable, TesseractOcrProvider  # noqa: E402
-from shared.page_text import build_page_text_evidence, extract_pptx_page_text  # noqa: E402
+from shared.page_text import PptxPageText, build_page_text_evidence, extract_pptx_page_text  # noqa: E402
 from shared.page_renderer import RenderedPage  # noqa: E402
 
 
@@ -70,6 +70,30 @@ def pptx_payload() -> bytes:
         archive.writestr("ppt/_rels/presentation.xml.rels", relationships)
         archive.writestr("ppt/slides/slide1.xml", native_slide)
         archive.writestr("ppt/slides/slide2.xml", image_slide)
+    return buffer.getvalue()
+
+
+def pptx_chart_payload() -> bytes:
+    presentation = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <p:presentation xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+      xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+      <p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>
+    </p:presentation>"""
+    relationships = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+      <Relationship Id="rId1" Type="slide" Target="slides/slide1.xml"/>
+    </Relationships>"""
+    chart_slide = """<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+      xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+      <p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>季度收入</a:t></a:r></a:p></p:txBody></p:sp>
+      <p:graphicFrame><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"/></a:graphic></p:graphicFrame>
+      </p:spTree></p:cSld>
+    </p:sld>"""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("ppt/presentation.xml", presentation)
+        archive.writestr("ppt/_rels/presentation.xml.rels", relationships)
+        archive.writestr("ppt/slides/slide1.xml", chart_slide)
     return buffer.getvalue()
 
 
@@ -139,6 +163,11 @@ class PageTextEvidenceTests(unittest.TestCase):
         self.assertFalse(pages[0].requires_ocr)
         self.assertTrue(pages[1].requires_ocr)
 
+    def test_chart_page_requires_ocr_even_when_title_is_native(self) -> None:
+        chart = extract_pptx_page_text(pptx_chart_payload())[0]
+        self.assertEqual(chart.native_text, "季度收入")
+        self.assertTrue(chart.requires_ocr)
+
     def test_only_image_page_uses_local_ocr(self) -> None:
         provider = FakeOcr(0.96)
         evidence = build_page_text_evidence(
@@ -156,8 +185,11 @@ class PageTextEvidenceTests(unittest.TestCase):
     def test_pdf_uses_meaningful_embedded_text_before_ocr(self) -> None:
         provider = FakeOcr(0.96)
         with mock.patch(
-            "shared.page_text.extract_pdf_page_text",
-            return_value=("翠湖天地一期项目资料与区位介绍及建筑品质配套说明详细资料", "建筑面积二百平方米房屋格局配套说明以及产权和交易条件资料"),
+            "shared.page_text.extract_pdf_page_inputs",
+            return_value=(
+                PptxPageText(1, "翠湖天地一期项目资料与区位介绍及建筑品质配套说明详细资料", False, False),
+                PptxPageText(2, "建筑面积二百平方米房屋格局配套说明以及产权和交易条件资料", False, False),
+            ),
         ):
             evidence = build_page_text_evidence(
                 SOURCE_ID,
@@ -176,8 +208,11 @@ class PageTextEvidenceTests(unittest.TestCase):
     def test_pdf_template_placeholder_is_not_trusted_as_native_text(self) -> None:
         provider = FakeOcr(0.96)
         with mock.patch(
-            "shared.page_text.extract_pdf_page_text",
-            return_value=("空白演示\n单击输入您的封面副标题", "空白演示\n单击输入您的封面副标题"),
+            "shared.page_text.extract_pdf_page_inputs",
+            return_value=(
+                PptxPageText(1, "", False, True),
+                PptxPageText(2, "", False, True),
+            ),
         ):
             evidence = build_page_text_evidence(
                 SOURCE_ID,
@@ -188,6 +223,22 @@ class PageTextEvidenceTests(unittest.TestCase):
             )
         self.assertEqual(provider.calls, [PNG_1, PNG_2])
         self.assertEqual([item.text_source for item in evidence], ["ocr", "ocr"])
+
+    def test_pdf_page_with_native_text_and_visuals_still_uses_ocr(self) -> None:
+        provider = FakeOcr(0.96)
+        with mock.patch(
+            "shared.page_text.extract_pdf_page_inputs",
+            return_value=(PptxPageText(1, "页面原生文字已经足够长但图表仍包含关键数据", True, True),),
+        ):
+            evidence = build_page_text_evidence(
+                SOURCE_ID,
+                ".pdf",
+                b"pdf",
+                (page(1, PNG_1),),
+                provider,
+            )
+        self.assertEqual(provider.calls, [PNG_1])
+        self.assertEqual(evidence[0].text_source, "native+ocr")
 
     def test_low_confidence_ocr_is_marked_unverified_without_requesting_human_review(self) -> None:
         evidence = build_page_text_evidence(
@@ -215,7 +266,7 @@ class PageTextEvidenceTests(unittest.TestCase):
         result = AutoOcrProvider((FakeOcr(0.99), DifferentOcr(0.99))).recognize(PNG_1)
         self.assertEqual(result.confidence, 0.0)
 
-    def test_automatic_ocr_accepts_high_confidence_text_with_partial_local_corroboration(self) -> None:
+    def test_automatic_ocr_rejects_partial_local_corroboration(self) -> None:
         class CorroboratingOcr(FakeOcr):
             def recognize(self, image: bytes) -> OcrResult:
                 self.calls.append(image)
@@ -227,8 +278,7 @@ class PageTextEvidenceTests(unittest.TestCase):
                 return OcrResult("上海翠湖天地高端住宅", self.confidence, self.name)
 
         result = AutoOcrProvider((PrimaryOcr(0.91), CorroboratingOcr(0.72))).recognize(PNG_1)
-        self.assertEqual(result.text, "上海翠湖天地高端住宅")
-        self.assertEqual(result.confidence, 0.91)
+        self.assertEqual(result.confidence, 0.0)
 
     def test_reviewed_correction_is_hashed_with_page_image(self) -> None:
         evidence = build_page_text_evidence(

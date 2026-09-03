@@ -150,7 +150,7 @@ Doctor 未通过时，富文档会准确停止并进入 02；不会静默换用�
 ## 当前范围与后续范围
 
 - 当前默认：MD、TXT、CSV，以及经 MarkItDown 转换的 DOCX、PPTX、XLSX、PDF、HTML、JSON。
-- 当前可选：PDF/PPTX 完整页图、PPT 原生文字、图片页 300 DPI 多次本地 OCR 一致性验证、逐条知识卡证据绑定，以及飞书“自动验证正文＋高清原页图”的正文/图片数量/尺寸/远端媒体 SHA256 回读。页图需要 `pdftoppm`、`pdfinfo`；本地 OCR Provider 需要 Tesseract 的 `chi_sim` 与 `eng` 语言包。macOS 已安装 Microsoft PowerPoint 时优先使用 PowerPoint 原生导出；首次运行可能出现 macOS 自动化授权提示。没有 PowerPoint 时使用 LibreOffice；PowerPoint 已存在但原生导出失败时停止，不静默降级。
+- 当前可选：PDF/PPTX 完整页图、PPT 原生文字、视觉页 300 DPI 多次本地 OCR 严格一致性检查、逐条知识卡原文摘录绑定，以及飞书“脱敏页文字＋高清原页图”的正文/图片数量/尺寸/远端媒体 SHA256 回读。OCR 至少两次高度一致才可继续，部分相似或单次高置信度不会放行；结果写入前再次执行隐私检查。页图需要 `pdftoppm`、`pdfinfo`；本地 OCR Provider 需要 Tesseract 的 `chi_sim` 与 `eng` 语言包。macOS 已安装 Microsoft PowerPoint 时优先使用 PowerPoint 原生导出；首次运行可能出现 macOS 自动化授权提示。没有 PowerPoint 时使用 LibreOffice；PowerPoint 已存在但原生导出失败时停止，不静默降级。
 - 不在当前范围：零散图片入库、音视频、图片向量检索、图片描述、猜测式图文对应、无确认自动发布。
 
 ## 包含的组件

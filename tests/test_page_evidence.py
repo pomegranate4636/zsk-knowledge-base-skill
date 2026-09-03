@@ -47,6 +47,13 @@ class LowConfidenceOcr:
         return OcrResult("不可靠文字", 0.42, self.name)
 
 
+class SensitiveOcr:
+    name = "test-sensitive-ocr"
+
+    def recognize(self, _image: bytes) -> OcrResult:
+        return OcrResult("联系人 13800138000 test@example.com", 0.99, self.name)
+
+
 def binding(backend: str = "obsidian", locator: str | None = None) -> Binding:
     return Binding(
         BINDING_SCHEMA,
@@ -113,6 +120,33 @@ class PageEvidenceIntakeTests(unittest.TestCase):
         self.assertEqual(response.record.page_artifacts[0].sha256, hashlib.sha256(PNG).hexdigest())
         self.assertTrue(any(event["action"] == "store_page_evidence" for event in response.evidence["events"]))
         self.assertEqual(response.evidence["page_evidence"]["status"], "complete")
+
+    @mock.patch("shared.stage5_intake.render_page_evidence")
+    @mock.patch("shared.stage5_intake.convert_to_markdown")
+    def test_ocr_only_sensitive_text_is_redacted_before_any_write(self, convert, render) -> None:
+        convert.return_value = MarkdownConversion("# 普通正文\n", "markitdown", "0.1.6")
+        render.return_value = rendered()
+        response = Stage5Intake(self.adapter, SensitiveOcr()).execute(
+            IntakeRequest(
+                TASK_ID,
+                self.binding,
+                "资料.pdf",
+                b"pdf",
+                "资料",
+                original_retention_approved=True,
+                page_evidence_mode="required",
+            )
+        )
+        self.assertEqual((response.status, response.code), ("registered", None))
+        self.assertEqual(response.record.privacy_status, "redacted")
+        readable = self.adapter._objects[f"source:{response.source_id}:readable"]["payload"].decode("utf-8")
+        self.assertNotIn("13800138000", readable)
+        self.assertNotIn("test@example.com", readable)
+        self.assertIn("[已脱敏]", readable)
+        self.assertEqual(
+            response.evidence["page_text_evidence"]["evidence_sha256"],
+            [item.evidence_sha256 for item in response.record.page_text_evidence],
+        )
 
     def test_default_intake_allows_processing_but_requires_original_retention_approval(self) -> None:
         request = IntakeRequest(TASK_ID, self.binding, "资料.pdf", b"pdf", "资料")
@@ -259,8 +293,29 @@ class PageEvidenceIntakeTests(unittest.TestCase):
             self.assertEqual((reused.status, reused.code), ("reused", None))
             self.assertEqual(reused.evidence["existing_layout_reused"], "human_named")
             self.assertEqual(reused.record.source_id, first.source_id)
+            self.assertEqual(reused.record.page_text_evidence, first.record.page_text_evidence)
             self.assertEqual(reused.refs, first.refs)
             self.assertIn(f"/{first.record.display_name}/页面证据/第001页.png", reused.refs[-1].locator)
+            text_evidence = reused.record.page_text_evidence[0]
+            routed = Stage6Knowledge(fresh_adapter).execute(
+                KnowledgeRequest(
+                    TASK_ID,
+                    active_binding,
+                    reused.record,
+                    "资料知识",
+                    "通用资料",
+                    "来源已经完整登记。",
+                    fact_evidence=(
+                        KnowledgeFact(
+                            "来源已经完整登记。",
+                            1,
+                            "页图文字",
+                            text_evidence.evidence_sha256,
+                        ),
+                    ),
+                )
+            )
+            self.assertEqual((routed.status, routed.code), ("registered", None))
             self.assertEqual(before, after)
 
     def test_fresh_obsidian_reuse_rejects_another_client_without_writes(self) -> None:

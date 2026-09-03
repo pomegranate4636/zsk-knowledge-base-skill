@@ -98,6 +98,21 @@ class KnowledgePageEvidenceTests(unittest.TestCase):
         )
         self.assertEqual((response.status, response.code), ("exception", "evidence_incomplete"))
 
+    def test_fact_quote_must_be_an_exact_page_excerpt(self) -> None:
+        text = source().page_text_evidence[0]
+        response = Stage6Knowledge(self.adapter).execute(
+            KnowledgeRequest(
+                TASK_ID,
+                self.binding,
+                source(),
+                "知识卡",
+                "主题",
+                "概括事实",
+                fact_evidence=(KnowledgeFact("概括事实", 1, "不存在的原文", text.evidence_sha256),),
+            )
+        )
+        self.assertEqual((response.status, response.code), ("exception", "evidence_incomplete"))
+
     def test_valid_fact_writes_page_original_and_hash(self) -> None:
         text = source().page_text_evidence[0]
         response = Stage6Knowledge(self.adapter).execute(

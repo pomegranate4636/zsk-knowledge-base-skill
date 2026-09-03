@@ -13,7 +13,7 @@ import tempfile
 from typing import Any, Mapping
 
 from .adapter import KnowledgeBaseAdapter
-from .contracts import BINDING_SCHEMA, SOURCE_ROLES, SOURCE_SCHEMA, TASK_ID, BackendObjectRef, Binding, ExceptionRecord, PageArtifact, PageTextEvidence, SourceRecord
+from .contracts import SOURCE_ROLES, SOURCE_SCHEMA, TASK_ID, BackendObjectRef, Binding, ExceptionRecord, PageArtifact, PageTextEvidence, SourceRecord
 from .markdown_converter import ConversionFailed, ConverterUnavailable, MarkdownConversion, convert_to_markdown
 from .naming import human_source_label, page_file_name
 from .page_renderer import PageRenderFailed, PageRendererUnavailable, RenderedPage, render_page_evidence
@@ -48,6 +48,30 @@ _QUESTIONS = {
     "privacy_approval_required": "是否允许在该私有知识库中保存敏感原件？",
     "version_conflict": "请确认它是否为已有来源的新版本。",
 }
+
+
+def _sensitive_count(*texts: str) -> int:
+    return sum(len(pattern.findall(text)) for text in texts for pattern in _SENSITIVE)
+
+
+def _redact_sensitive(text: str) -> str:
+    for pattern in _SENSITIVE:
+        text = pattern.sub("[已脱敏]", text)
+    return text
+
+
+def _redact_page_text(item: PageTextEvidence) -> PageTextEvidence:
+    return PageTextEvidence.create(
+        item.source_id,
+        item.page_number,
+        item.page_sha256,
+        native_text=_redact_sensitive(item.native_text),
+        ocr_text=_redact_sensitive(item.ocr_text),
+        verbatim_text=_redact_sensitive(item.verbatim_text),
+        text_source=item.text_source,
+        confidence=item.confidence,
+        review_status=item.review_status,
+    )
 
 
 @dataclass(frozen=True)
@@ -131,9 +155,12 @@ class Stage5Intake:
             return self._exception(request.binding, source_id, "source_unreadable", evidence)
         body = conversion.text
         evidence["conversion"] = {"engine": conversion.engine, "version": conversion.version}
-        sensitive_count = sum(len(pattern.findall(body)) for pattern in _SENSITIVE)
-        evidence["privacy"] = {"sensitive_match_count": sensitive_count, "original_retention_approved": request.original_retention_approved}
-        if sensitive_count and not request.original_retention_approved:
+        initial_sensitive_count = _sensitive_count(body)
+        if initial_sensitive_count and not request.original_retention_approved:
+            evidence["privacy"] = {
+                "sensitive_match_count": initial_sensitive_count,
+                "original_retention_approved": False,
+            }
             return self._exception(request.binding, source_id, "privacy_approval_required", evidence)
         name_key = (request.binding.client_id, request.file_name.casefold())
         prior_source = self._names.get(name_key)
@@ -143,10 +170,6 @@ class Stage5Intake:
             if not confirmed:
                 return self._exception(request.binding, source_id, "version_conflict", evidence)
             version_of = prior_source
-        privacy_status = "redacted" if sensitive_count else "passed"
-        if sensitive_count:
-            for pattern in _SENSITIVE:
-                body = pattern.sub("[已脱敏]", body)
         rendered_pages: tuple[RenderedPage, ...] = ()
         page_engine: str | None = None
         if request.page_evidence_mode == "required":
@@ -201,6 +224,24 @@ class Stage5Intake:
                 "page_count": len(page_text_evidence),
                 "evidence_sha256": [item.evidence_sha256 for item in page_text_evidence],
             }
+        sensitive_texts = [body]
+        for item in page_text_evidence:
+            sensitive_texts.extend((item.native_text, item.ocr_text, item.verbatim_text))
+        sensitive_count = _sensitive_count(*sensitive_texts)
+        evidence["privacy"] = {
+            "sensitive_match_count": sensitive_count,
+            "original_retention_approved": request.original_retention_approved,
+        }
+        if sensitive_count and not request.original_retention_approved:
+            return self._exception(request.binding, source_id, "privacy_approval_required", evidence)
+        privacy_status = "redacted" if sensitive_count else "passed"
+        if sensitive_count:
+            body = _redact_sensitive(body)
+            page_text_evidence = tuple(_redact_page_text(item) for item in page_text_evidence)
+            if page_text_evidence:
+                evidence["page_text_evidence"]["evidence_sha256"] = [
+                    item.evidence_sha256 for item in page_text_evidence
+                ]
         display_name = human_source_label(request.source_title)
         if page_text_evidence:
             body = self._with_page_text(body, page_text_evidence)

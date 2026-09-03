@@ -1,20 +1,20 @@
 """飞书阶段 5 的薄 File/Doc 存储器；对象 token 不向上层暴露。"""
 from __future__ import annotations
-from collections import Counter
 import hashlib
 import json
 import re
 import xml.etree.ElementTree as ET
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 from .contracts import AdapterResult, BackendObjectRef, ExceptionRecord, PageArtifact, SourceRecord
 from .feishu_cli import CliResponse, CliRunner
-from .naming import page_file_name, safe_title, source_original_name
+from .naming import safe_title, source_original_name
 class FeishuStage5Storage:
     def __init__(self, runner: CliRunner, space_id: str, root_nodes: Mapping[str, str]) -> None:
         self.runner = runner
         self.space_id = space_id
         self.root_nodes = dict(root_nodes)
         self._stored: dict[str, tuple[str, BackendObjectRef]] = {}
+        self._doc_tokens: dict[str, str] = {}
     def store_original(self, source: SourceRecord, payload: bytes) -> AdapterResult:
         if hashlib.sha256(payload).hexdigest() != source.original_sha256:
             return AdapterResult.failed("source_unreadable", "Original payload hash does not match its record.", blocked=True)
@@ -74,13 +74,15 @@ class FeishuStage5Storage:
         if page.width_px < 1 or page.height_px < 1:
             return AdapterResult.failed("source_unreadable", "Page dimensions are required for Feishu media verification.", blocked=True)
         key = f"{source.source_id}:page:{page.page_number:03d}"
-        registered, failure = self._find_source_document(source.source_id)
-        if failure:
-            return failure
-        if registered is None:
-            return AdapterResult.failed("ownership_unknown", "Readable source document is missing before page media insert.", blocked=True)
-        readable_node, _content = registered
-        token = readable_node.get("obj_token")
+        token = self._doc_tokens.get(f"{source.source_id}:readable")
+        if token is None:
+            registered, failure = self._find_source_document(source.source_id)
+            if failure:
+                return failure
+            if registered is None:
+                return AdapterResult.failed("ownership_unknown", "Readable source document is missing before page media insert.", blocked=True)
+            readable_node, _content = registered
+            token = readable_node.get("obj_token")
         if not isinstance(token, str) or not token:
             return AdapterResult.failed("readback_failed", "Readable source document has no stable token.", blocked=True)
         before, failure = self._fetch_full_document(token)
@@ -194,6 +196,10 @@ class FeishuStage5Storage:
                 matches.append((item, content))
         if len(matches) > 1:
             return None, AdapterResult.failed("duplicate_conflict", "More than one readable source has the same source identity.", blocked=True)
+        if matches:
+            token = matches[0][0].get("obj_token")
+            if isinstance(token, str) and token:
+                self._doc_tokens[f"{source_id}:readable"] = token
         return (matches[0] if matches else None), None
 
     def _fetch_full_document(self, token: str) -> tuple[dict[str, Any], AdapterResult | None]:
@@ -285,6 +291,8 @@ class FeishuStage5Storage:
             effective_locator = f"feishu://doc/{token}" if kind in {"knowledge_asset", "method_asset", "profile"} else locator
             ref = self._ref(key, kind, payload, effective_locator)
             self._stored[key] = (hashlib.sha256(payload).hexdigest(), ref)
+            if isinstance(token, str) and token:
+                self._doc_tokens[key] = token
             return AdapterResult.reused(ref, checked=("remote_doc_present", "content_readback"))
         create = (
             "lark-cli", "--as", "user", "wiki", "nodes", "create", "--params",
@@ -312,6 +320,7 @@ class FeishuStage5Storage:
         effective_locator = f"feishu://doc/{token}" if kind in {"knowledge_asset", "method_asset", "profile"} else locator
         ref = self._ref(key, kind, payload, effective_locator)
         self._stored[key] = (hashlib.sha256(payload).hexdigest(), ref)
+        self._doc_tokens[key] = token
         return AdapterResult.ok(ref, checked=("wiki_doc_created", "markdown_written", "content_readback"))
 
     @staticmethod
@@ -338,15 +347,18 @@ class FeishuStage5Storage:
         elif not is_markdown:
             return False
         expected_body = payload.decode("utf-8").rstrip()
+        expected_tokens = re.findall(r"[0-9A-Za-z_\u4e00-\u9fff]+", expected_body)
+        remote_tokens = re.findall(r"[0-9A-Za-z_\u4e00-\u9fff]+", content if is_markdown else " ".join(xml_root.itertext()) if xml_root is not None else "")
+
+        def contains_ordered_body() -> bool:
+            width = len(expected_tokens)
+            return width == 0 or any(remote_tokens[index:index + width] == expected_tokens for index in range(len(remote_tokens) - width + 1))
+
         if not wrapped:
-            expected_tokens = Counter(re.findall(r"[0-9A-Za-z_\u4e00-\u9fff]+", expected_body))
-            remote_tokens = Counter(re.findall(r"[0-9A-Za-z_\u4e00-\u9fff]+", content))
-            return all(remote_tokens[token] >= count for token, count in expected_tokens.items())
+            return contains_ordered_body()
         remote_text = content if is_markdown else " ".join(xml_root.itertext()) if xml_root is not None else ""
         marker_count = content.count(f"`{digest}`") if is_markdown else remote_text.count(digest)
-        expected_tokens = Counter(re.findall(r"[0-9A-Za-z_\u4e00-\u9fff]+", expected_body))
-        remote_tokens = Counter(re.findall(r"[0-9A-Za-z_\u4e00-\u9fff]+", remote_text))
-        return marker_count == 2 and all(remote_tokens[token] >= count for token, count in expected_tokens.items())
+        return marker_count == 2 and contains_ordered_body()
 
     def _replay(self, key: str, payload: bytes) -> AdapterResult | None:
         existing = self._stored.get(key)
