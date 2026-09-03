@@ -1,5 +1,6 @@
 """飞书阶段 5 的薄 File/Doc 存储器；对象 token 不向上层暴露。"""
 from __future__ import annotations
+from collections import Counter
 import hashlib
 import json
 import re
@@ -226,7 +227,7 @@ class FeishuStage5Storage:
                 for group in reference_map.values():
                     if isinstance(group, dict) and isinstance(group.get(ref), dict):
                         attributes.update(group[ref])
-            token = attributes.get("token") or attributes.get("file_token")
+            token = attributes.get("token") or attributes.get("file_token") or attributes.get("src")
             try:
                 width = int(attributes.get("width") or attributes.get("width_px") or 0)
                 height = int(attributes.get("height") or attributes.get("height_px") or 0)
@@ -237,7 +238,7 @@ class FeishuStage5Storage:
                     "token": token,
                     "width_px": width,
                     "height_px": height,
-                    "caption": str(attributes.get("caption") or ""),
+                    "caption": str(attributes.get("caption") or "").strip(),
                 })
         return media
 
@@ -321,12 +322,29 @@ class FeishuStage5Storage:
     def _matches_document(title: str, payload: bytes, content: str, wrapped: bool = True) -> bool:
         digest = hashlib.sha256(payload).hexdigest()
         title_prefixes = (f"# {title}\n", f"<title>{title}</title>\n")
-        if not content.rstrip().startswith(title_prefixes):
+        normalized = content.rstrip()
+        is_markdown = normalized.startswith(title_prefixes)
+        xml_root: ET.Element | None = None
+        if not is_markdown and normalized.startswith("<title"):
+            try:
+                xml_root = ET.fromstring(f"<zsk-root>{normalized}</zsk-root>")
+            except ET.ParseError:
+                return False
+            title_node = next((item for item in xml_root if item.tag.rsplit("}", 1)[-1] == "title"), None)
+            if title_node is None or "".join(title_node.itertext()) != title:
+                return False
+        elif not is_markdown:
             return False
         expected_body = payload.decode("utf-8").rstrip()
         if not wrapped:
-            return content.rstrip().endswith(expected_body)
-        return content.count(f"`{digest}`") == 2 and expected_body in content
+            expected_tokens = Counter(re.findall(r"[0-9A-Za-z_\u4e00-\u9fff]+", expected_body))
+            remote_tokens = Counter(re.findall(r"[0-9A-Za-z_\u4e00-\u9fff]+", content))
+            return all(remote_tokens[token] >= count for token, count in expected_tokens.items())
+        remote_text = content if is_markdown else " ".join(xml_root.itertext()) if xml_root is not None else ""
+        marker_count = content.count(f"`{digest}`") if is_markdown else remote_text.count(digest)
+        expected_tokens = Counter(re.findall(r"[0-9A-Za-z_\u4e00-\u9fff]+", expected_body))
+        remote_tokens = Counter(re.findall(r"[0-9A-Za-z_\u4e00-\u9fff]+", remote_text))
+        return marker_count == 2 and all(remote_tokens[token] >= count for token, count in expected_tokens.items())
 
     def _replay(self, key: str, payload: bytes) -> AdapterResult | None:
         existing = self._stored.get(key)

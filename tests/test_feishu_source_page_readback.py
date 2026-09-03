@@ -82,7 +82,7 @@ def calls(downloaded: bytes) -> tuple[RecordedCliCall, ...]:
         "--output", "{output}", "--format", "json",
     )
     readable = f'---\nsource_id: "{record.source_id}"\ndisplay_name: "资料"\noriginal_file_name: "资料.pptx"\n---\n'
-    xml = f'<title>资料</title><p>校对正文</p><img token="media-token" width="1600" height="900" caption="{caption}"/>'
+    xml = f'<title>资料</title><p>校对正文</p><img src="media-token" width="1600" height="900" caption="{caption}&#xA;"/>'
     return (
         RecordedCliCall(list_call, '{"ok":true,"data":{"items":[{"title":"资料","obj_type":"docx","obj_token":"readable-token"}]}}'),
         RecordedCliCall(fetch_markdown, json.dumps({"ok": True, "data": {"document": {"content": readable}}}, ensure_ascii=False)),
@@ -105,6 +105,36 @@ class FeishuSourcePageReadbackTests(unittest.TestCase):
         self.assertTrue(FeishuStage5Storage._matches_document("资料", payload, stored))
         tampered = stored.replace("校对正文", "被篡改正文")
         self.assertFalse(FeishuStage5Storage._matches_document("资料", payload, tampered))
+
+    def test_readable_xml_with_element_ids_is_verified_semantically(self) -> None:
+        payload = "## 页级校对正文\n\n校对正文".encode("utf-8")
+        digest = hashlib.sha256(payload).hexdigest()
+        stored = (
+            '<title id="doc-token">资料</title>'
+            f'<p id="first">内容校验：<code>{digest}</code></p>'
+            '<h2 id="heading">页级校对正文</h2><p id="body">校对正文</p>'
+            f'<p id="last">校验结束：<code>{digest}</code></p>'
+        )
+        self.assertTrue(FeishuStage5Storage._matches_document("资料", payload, stored))
+        self.assertFalse(FeishuStage5Storage._matches_document("资料", payload, stored.replace("校对正文", "被篡改正文")))
+
+    def test_readable_markdown_normalization_does_not_create_version_conflict(self) -> None:
+        payload = "---\nsource_id: \"SRC-1\"\n---\n\n| 户型 | 单价 |\n| --- | --- |\n| 160 | 12.8 |".encode("utf-8")
+        digest = hashlib.sha256(payload).hexdigest()
+        stored = (
+            "# 资料\n\n"
+            f"内容校验：`{digest}`\n\n"
+            "---\n\n## source_id: \"SRC-1\"  \n\n| 户型 | 单价 |\n|-|-|\n| 160 | 12.8 |\n\n"
+            f"校验结束：`{digest}`"
+        )
+        self.assertTrue(FeishuStage5Storage._matches_document("资料", payload, stored))
+        self.assertFalse(FeishuStage5Storage._matches_document("资料", payload, stored.replace("12.8", "99.9")))
+
+    def test_unwrapped_asset_allows_table_normalization_but_not_tampering(self) -> None:
+        payload = "# 资料\n\n| 户型 | 单价 |\n| --- | --- |\n| 160 | 12.8 |".encode("utf-8")
+        stored = "# 资料\n\n| 户型 | 单价 |\n|-|-|\n| 160 | 12.8 |"
+        self.assertTrue(FeishuStage5Storage._matches_document("资料", payload, stored, wrapped=False))
+        self.assertFalse(FeishuStage5Storage._matches_document("资料", payload, stored.replace("12.8", "99.9"), wrapped=False))
 
     def test_embeds_page_and_reads_back_count_dimensions_and_hash(self) -> None:
         record, page = source()
