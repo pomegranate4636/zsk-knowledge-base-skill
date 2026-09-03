@@ -59,7 +59,7 @@ class IntakeRequest:
     source_title: str
     source_role: str = "unknown"
     permission_status: str = "allowed"
-    original_retention_approved: bool = True
+    original_retention_approved: bool = False
     stable_source_locator: str | None = None
     confirmed_version_of: str | None = None
     page_evidence_mode: str = "off"

@@ -105,6 +105,13 @@ class Stage6Knowledge:
         cautions = request.cautions.strip() or "不得补充来源未说明的事实或承诺。"
         topic = json.dumps(request.topic.strip(), ensure_ascii=False)
         scope = json.dumps(applicability, ensure_ascii=False)
+        if request.fact_evidence:
+            facts = "\n\n".join(
+                f"### {item.fact.strip()}\n\n- 页码：第 {item.page_number} 页\n- 原文：{item.verbatim_text}\n- 证据哈希：`{item.evidence_sha256}`"
+                for item in request.fact_evidence
+            )
+        else:
+            facts = request.facts.strip()
         body = (
             "---\n"
             f"asset_id: {asset_id}\n"
@@ -120,7 +127,7 @@ class Stage6Knowledge:
             f"source_id: \"{request.source.source_id}\"\n"
             "---\n\n"
             f"# {request.title.strip()}\n\n## 主题\n\n{request.topic.strip()}\n\n"
-            f"## 核心知识\n\n{request.facts.strip()}\n\n## 适用范围\n\n{applicability}\n\n"
+            f"## 核心知识\n\n{facts}\n\n## 适用范围\n\n{applicability}\n\n"
             f"## 使用边界\n\n{cautions}\n\n## 来源\n\n- {request.source.source_title}\n"
         )
         return AssetPayload(
@@ -129,5 +136,10 @@ class Stage6Knowledge:
             body,
             request.source.source_id,
             "business_knowledge",
-            {"topic": request.topic.strip(), "status": "confirmed", "applicable_workflows": ("content-koubo-slim", "content-gzh-slim")},
+            {
+                "topic": request.topic.strip(),
+                "status": "confirmed",
+                "applicable_workflows": ("content-koubo-slim", "content-gzh-slim"),
+                "fact_evidence": [item.as_dict() for item in request.fact_evidence],
+            },
         )

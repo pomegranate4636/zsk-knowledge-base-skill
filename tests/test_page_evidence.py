@@ -114,10 +114,10 @@ class PageEvidenceIntakeTests(unittest.TestCase):
         self.assertTrue(any(event["action"] == "store_page_evidence" for event in response.evidence["events"]))
         self.assertEqual(response.evidence["page_evidence"]["status"], "complete")
 
-    def test_default_intake_authorizes_processing_and_original_retention(self) -> None:
+    def test_default_intake_allows_processing_but_requires_original_retention_approval(self) -> None:
         request = IntakeRequest(TASK_ID, self.binding, "资料.pdf", b"pdf", "资料")
         self.assertEqual(request.permission_status, "allowed")
-        self.assertTrue(request.original_retention_approved)
+        self.assertFalse(request.original_retention_approved)
 
     @mock.patch("shared.stage5_intake.render_page_evidence")
     @mock.patch("shared.stage5_intake.convert_to_markdown")
@@ -131,6 +131,7 @@ class PageEvidenceIntakeTests(unittest.TestCase):
                 "资料.pdf",
                 b"pdf",
                 "资料",
+                original_retention_approved=True,
                 page_evidence_mode="required",
             )
         )
@@ -240,7 +241,7 @@ class PageEvidenceIntakeTests(unittest.TestCase):
             ) as render:
                 convert.return_value = MarkdownConversion("# PDF\n", "markitdown", "0.1.6")
                 render.return_value = rendered()
-                first = Stage5Intake(first_adapter).execute(request)
+                first = Stage5Intake(first_adapter, HighConfidenceOcr()).execute(request)
             self.assertEqual((first.status, first.code), ("registered", None))
             before = file_snapshot(folder)
 
@@ -397,7 +398,7 @@ class PageEvidenceIntakeTests(unittest.TestCase):
                 "shared.stage5_intake.convert_to_markdown",
                 return_value=MarkdownConversion("# PDF\n", "markitdown", "0.1.6"),
             ), mock.patch("shared.stage5_intake.render_page_evidence", return_value=rendered()):
-                first = Stage5Intake(first_adapter).execute(approved)
+                first = Stage5Intake(first_adapter, HighConfidenceOcr()).execute(approved)
             self.assertEqual((first.status, first.code), ("registered", None))
             fresh_adapter = ObsidianAdapter()
             fresh_adapter.resolve_binding(active_binding)
@@ -433,7 +434,7 @@ class PageEvidenceIntakeTests(unittest.TestCase):
                 "shared.stage5_intake.convert_to_markdown",
                 return_value=MarkdownConversion("# PDF\n", "markitdown", "0.1.6"),
             ), mock.patch("shared.stage5_intake.render_page_evidence", return_value=rendered()):
-                first = Stage5Intake(first_adapter).execute(approved)
+                first = Stage5Intake(first_adapter, HighConfidenceOcr()).execute(approved)
             self.assertEqual((first.status, first.code), ("registered", None))
 
             fresh_adapter = ObsidianAdapter()
@@ -494,7 +495,7 @@ class PageEvidenceIntakeTests(unittest.TestCase):
                 "shared.stage5_intake.convert_to_markdown",
                 return_value=MarkdownConversion("# PDF\n", "markitdown", "0.1.6"),
             ), mock.patch("shared.stage5_intake.render_page_evidence", return_value=rendered()):
-                first = Stage5Intake(first_adapter).execute(request)
+                first = Stage5Intake(first_adapter, HighConfidenceOcr()).execute(request)
             readable = next((Path(folder) / "01-来源索引" / first.record.display_name).glob("*-可读版.md"))
             content = readable.read_text(encoding="utf-8")
             content = content.replace(
@@ -534,7 +535,7 @@ class PageEvidenceIntakeTests(unittest.TestCase):
                 "shared.stage5_intake.convert_to_markdown",
                 return_value=MarkdownConversion("# PDF\n", "markitdown", "0.1.6"),
             ), mock.patch("shared.stage5_intake.render_page_evidence", return_value=rendered()):
-                first = Stage5Intake(first_adapter).execute(request)
+                first = Stage5Intake(first_adapter, HighConfidenceOcr()).execute(request)
             readable = next((Path(folder) / "01-来源索引" / first.record.display_name).glob("*-可读版.md"))
             content = readable.read_text(encoding="utf-8")
             content = content.replace('"page_number": 1', '"page_number": 2', 1)
