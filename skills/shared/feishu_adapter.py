@@ -105,6 +105,19 @@ class FeishuAdapter:
             metadata={"auth_mode": "host_managed", "write_permissions": "not_preverified"},
         )
 
+    def current_account(self) -> AdapterResult:
+        data, failure = self._json(
+            ("lark-cli", "--as", "user", "contact", "+get-user", "--format", "json"),
+            "feishu_auth_missing",
+        )
+        if failure:
+            return failure
+        user = data.get("user", data)
+        if not isinstance(user, dict) or not all(isinstance(user.get(key), str) and user[key].strip() for key in ("open_id", "tenant_key")):
+            return AdapterResult.failed("feishu_auth_missing", "Cannot bind confirmation without current user and tenant identity.", blocked=True)
+        fingerprint = hashlib.sha256(json.dumps([user["tenant_key"], user["open_id"]], ensure_ascii=False).encode()).hexdigest()
+        return AdapterResult.ok(metadata={"account_fingerprint": fingerprint})
+
     def resolve_binding(self, binding: Binding) -> AdapterResult:
         if binding.backend_type != "feishu":
             return AdapterResult.failed("backend_unsupported", "Feishu Adapter only accepts the feishu backend.", blocked=True)

@@ -156,7 +156,7 @@ python3 zsk-knowledge-base-skill/install.py --doctor --formats docx,pdf
 其他宿主检查已安装组件时仍需传 `--host` 和 `--dest`。依赖补齐命令不复制 Skills，不需要重装已存在组件。
 
 - 合成文件转换已通过：复用现有程序，零下载。
-- 格式未通过：仅补该格式依赖，复用 pip/pipx 缓存；不使用 `--force` 或 `markitdown[all]`。
+- 格式未通过：先核对当前可执行文件确实属于该 pipx 环境，保留当前版本补对应格式；新装使用验证版本。环境不一致则停止并提示，不降级、不另装无效副本。复用 pip/pipx 缓存，不使用 `--force` 或 `markitdown[all]`。
 - 首次安装要提前准备全部 Office/PDF 时，仍可显式用 `--install-markitdown`，也可配 `--formats` 缩小范围。
 - 下载失败：保留已完整安装的 ZSK，明确“可建库，富文档未就绪”，稍后仅重试依赖。
 - `--doctor` 不带格式只检查建库组件完整性；带格式才以实际转换检查对应能力，不再仅凭 `--version` 判定。
@@ -179,6 +179,10 @@ Windows 安全软件若拦截 CLI，只核实并处理可信程序的具体路�
 - `zsk-profile`：整理主体确认事实、运营设定和候选素材。
 - `markitdown-skill`：必装的 Microsoft MarkItDown 转换说明与运行边界；供 ZSK 后台和独立文档转换复用，不是第二个入库入口。
 - `shared`：以上组件共用的合同、格式读取和飞书／Obsidian 适配代码。
+
+## 建库确认如何跨次执行
+
+首次预览把一次性确认摘要保存在宿主本机持久状态目录（默认 `~/.zsk/confirmations`，可配置 `ZSK_STATE_DIR`）。用户确认后可在另一个 Python 进程继续，使用同一状态目录与任务 ID；30 分钟内有效，消费后不可重放。飞书确认绑定当前用户和租户，账号变化时必须重新预览。只存摘要与期限，不保存凭据或客户正文；本机记录失败则不建库。
 
 ## 第一次使用示例
 

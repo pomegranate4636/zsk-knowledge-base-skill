@@ -23,7 +23,7 @@ class Runner:
         self.calls = []
         self.version = version
         self.auth = auth or CliResponse(2, '', 'Error: unknown command "auth" for "lark-cli"')
-        self.identity = identity or CliResponse(0, json.dumps({"ok": True, "data": {"user": {"open_id": "ou_probe"}}}))
+        self.identity = identity or CliResponse(0, json.dumps({"ok": True, "data": {"user": {"open_id": "ou_probe", "tenant_key": "tenant_probe"}}}))
 
     def run(self, argv, *, stdin=None):
         self.calls.append(tuple(argv))
@@ -116,10 +116,35 @@ class ConverterCompatibilityTests(unittest.TestCase):
             self.assertTrue(install.install_converter(('docx',)))
             run.assert_not_called()
 
-    def test_installs_only_failed_format_and_verifies_afterward(self):
-        with mock.patch.dict('os.environ', {}, clear=True), mock.patch.object(install, 'probe_formats', side_effect=[{'docx': True, 'pdf': False}, {'docx': True, 'pdf': True}]), mock.patch.object(install.shutil, 'which', return_value='/bin/pipx'), mock.patch.object(install.subprocess, 'run', side_effect=[subprocess.CompletedProcess([], 0, '{"venvs":{"markitdown":{}}}', ''), subprocess.CompletedProcess([], 0, '', '')]) as run:
-            self.assertTrue(install.install_converter(('docx', 'pdf')))
-            self.assertEqual(run.call_args_list[1].args[0], ('/bin/pipx', 'runpip', 'markitdown', 'install', 'markitdown[pdf]==0.1.6'))
+    def test_installs_only_failed_format_and_preserves_version(self):
+        with tempfile.TemporaryDirectory() as folder:
+            exe = Path(folder) / 'markitdown'
+            exe.touch()
+            metadata = {'venvs': {'markitdown': {'metadata': {'main_package': {'app_paths': [str(exe)]}}}}}
+            responses = [subprocess.CompletedProcess([], 0, json.dumps(metadata), ''),
+                         subprocess.CompletedProcess([], 0, 'Name: markitdown\nVersion: 0.1.7\n', ''),
+                         subprocess.CompletedProcess([], 0, '', '')]
+            with mock.patch.dict('os.environ', {}, clear=True), mock.patch.object(install, 'probe_formats', side_effect=[{'docx': True, 'pdf': False}, {'docx': True, 'pdf': True}]), mock.patch.object(install.shutil, 'which', side_effect=lambda name: '/bin/pipx' if name == 'pipx' else str(exe)), mock.patch.object(install.subprocess, 'run', side_effect=responses) as run:
+                self.assertTrue(install.install_converter(('docx', 'pdf')))
+                self.assertEqual(run.call_args_list[-1].args[0], ('/bin/pipx', 'runpip', 'markitdown', 'install', 'markitdown[pdf]==0.1.7'))
+
+    def test_other_python_environment_is_not_modified(self):
+        with mock.patch.dict('os.environ', {}, clear=True), mock.patch.object(install, 'probe_formats', return_value={'docx': False}), mock.patch.object(install.shutil, 'which', side_effect=lambda name: '/bin/pipx' if name == 'pipx' else '/another/markitdown'), mock.patch.object(install.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '{"venvs":{"markitdown":{}}}', '')) as run:
+            self.assertFalse(install.install_converter(('docx',)))
+            self.assertEqual(len(run.call_args_list), 1)  # inventory only, no pip install
+
+    def test_malformed_pipx_metadata_stops_before_install(self):
+        with mock.patch.dict('os.environ', {}, clear=True), mock.patch.object(install, 'probe_formats', return_value={'docx': False}), mock.patch.object(install.shutil, 'which', return_value='/fake/executable'), mock.patch.object(install.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '{"venvs":{"markitdown":{"metadata":null}}}', '')) as run:
+            self.assertFalse(install.install_converter(('docx',)))
+            self.assertEqual(len(run.call_args_list), 1)
+
+    def test_read_only_flags_cannot_be_combined_with_install(self):
+        for flags in [('--check', '--dependencies-only'), ('--doctor', '--dependencies-only'), ('--package-check', '--install-markitdown'), ('--check', '--install-markitdown')]:
+            with self.subTest(flags=flags), mock.patch.object(sys, 'argv', ['install.py', *flags, '--formats', 'docx']), mock.patch.object(install, 'install_converter') as dep, mock.patch.object(install, 'install') as copy:
+                with self.assertRaises(SystemExit):
+                    install.main()
+                dep.assert_not_called()
+                copy.assert_not_called()
 
     def test_dependencies_only_does_not_reinstall_skill(self):
         with mock.patch.object(sys, 'argv', ['install.py', '--dependencies-only', '--formats', 'docx']), mock.patch.object(install, 'install_converter', return_value=True) as dep, mock.patch.object(install, 'install') as copy:

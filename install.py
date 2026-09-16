@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -36,6 +37,7 @@ SHARED_REQUIRED_FILES = (
     "content_source_contract.py",
     "contracts.md",
     "contracts.py",
+    "confirmation_store.py",
     "evidence.py",
     "fake_adapter.py",
     "feishu_adapter.py",
@@ -150,7 +152,7 @@ def install_converter(formats: tuple[str, ...] = ("docx", "pdf", "pptx", "xlsx")
         print("未找到 pipx，无法补齐转换依赖；建库不受影响。安装说明：https://github.com/microsoft/markitdown", file=sys.stderr)
         return False
     extras = tuple(kind for kind in missing if kind in {"docx", "pdf", "pptx", "xlsx"})
-    spec = "markitdown" + ("[" + ",".join(extras) + "]" if extras else "") + "==0.1.6"
+    package = "markitdown" + ("[" + ",".join(extras) + "]" if extras else "")
     # Reuse pipx's own environment, never inject into an unrelated executable.
     try:
         info = subprocess.run((pipx, "list", "--json"), capture_output=True, text=True, timeout=15, check=False)
@@ -161,7 +163,33 @@ def install_converter(formats: tuple[str, ...] = ("docx", "pdf", "pptx", "xlsx")
     if not isinstance(environments, dict):
         print("无法检查 pipx 环境，未安装。", file=sys.stderr)
         return False
-    command = (pipx, "runpip", "markitdown", "install", spec) if "markitdown" in environments else (pipx, "install", spec)
+    current = shutil.which("markitdown")
+    managed = environments.get("markitdown")
+    if current or managed is not None:
+        metadata = managed.get("metadata") if isinstance(managed, dict) else None
+        main = metadata.get("main_package") if isinstance(metadata, dict) else None
+        paths = main.get("app_paths", []) if isinstance(main, dict) else []
+        owned = False
+        for item in paths if isinstance(paths, list) else []:
+            value = item.get("__Path__") if isinstance(item, dict) else item
+            try:
+                owned = owned or bool(current and isinstance(value, str) and os.path.samefile(current, value))
+            except OSError:
+                pass
+        if not owned:
+            print("当前转换器与 pipx 环境不一致或无法确认；未下载、未修改。请在当前转换器所属环境补依赖，或明确指定要使用的环境。", file=sys.stderr)
+            return False
+        try:
+            shown = subprocess.run((pipx, "runpip", "markitdown", "show", "markitdown"), capture_output=True, text=True, timeout=15, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        found = re.search(r"^Version: ([0-9][0-9A-Za-z.+!-]*)$", shown.stdout, re.MULTILINE)
+        if shown.returncode != 0 or not found:
+            print("无法核实当前转换器版本；未修改依赖。", file=sys.stderr)
+            return False
+        command = (pipx, "runpip", "markitdown", "install", package + "==" + found.group(1))
+    else:
+        command = (pipx, "install", package + "==0.1.6")
     print("正在补齐转换格式：" + "、".join(missing) + "；首次下载可能需要几分钟……")
     try:
         completed = subprocess.run(command, timeout=MARKITDOWN_INSTALL_TIMEOUT_SECONDS,
@@ -365,6 +393,9 @@ def main() -> int:
     parser.add_argument("--package-check", action="store_true", help="检查当前安装包结构，不写入")
     parser.add_argument("--install-markitdown", action="store_true", help="安装或补齐 MarkItDown 最小格式依赖")
     args = parser.parse_args()
+    modes = (args.check, args.doctor, args.package_check, args.dependencies_only)
+    if sum(modes) > 1 or (args.install_markitdown and any(modes)):
+        parser.error("检查、依赖安装与组件安装参数互斥；未执行任何安装")
 
     if args.package_check:
         package_root = Path(__file__).resolve().parent

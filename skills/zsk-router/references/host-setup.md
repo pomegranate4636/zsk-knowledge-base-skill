@@ -33,6 +33,14 @@ python3 install.py --host doubao --dest /已核实的持久Skills目录 --doctor
 python3 install.py --dependencies-only --formats docx,pdf
 ```
 
-该命令用合成文件实测转换，已通过则零下载；仅为缺失格式安装固定验证版本的依赖，复用 pipx/pip 缓存，不用 `--force` 或 `markitdown[all]`。不自动换未经确认的镜像。官方来源：https://github.com/microsoft/markitdown 。下载失败保留可建库的 ZSK，明确富文档未就绪，重试依赖即可，不重装整套 Skill。
+该命令用合成文件实测转换，已通过则零下载；仅为缺失格式补依赖：新装使用验证版本，已有 pipx 转换器保留实测的当前版本，复用 pipx/pip 缓存，不用 `--force` 或 `markitdown[all]`。不自动换未经确认的镜像。官方来源：https://github.com/microsoft/markitdown 。下载失败保留可建库的 ZSK，明确富文档未就绪，重试依赖即可，不重装整套 Skill。
 
 `--doctor` 无 `--formats` 只判断建库组件完整性，不宣称所有格式可用。`--version` 不支持时允许验证同一 CLI 的帮助信息，并在证据中记录版本未报告；以实际转换结果决定是否可用，不编造版本。正式来源的隐私检查、非空正文与写后回读保持不变。
+
+## 跨次执行的建库确认
+
+`FirstRunBootstrap` 把确认存入宿主本机持久记录，默认 `~/.zsk/confirmations`，可用绝对路径 `ZSK_STATE_DIR` 指定宿主自己的持久状态根，或在构造器传 `confirmation_dir`。预览与用户确认后的执行必须使用同一状态位置和 `task_id`；不能用每次变化的临时任务目录。无需保持同一个 Python 进程。
+
+预览只写本机确认摘要，不创建飞书/Obsidian 对象。摘要绑定任务、后端、目标、模板、预置包和飞书用户＋租户；不保存凭据、用户资料或正文。有效期 30 分钟，一次性消费；账号切换、目标变化、过期、重复使用或状态不可读时停止，重新展示预览。提交创建前再次检查当前账号。中途失败的旧确认不能自动重试，已有对象仍按原规则报告，不删除。
+
+依赖修复前核对当前 `markitdown` 可执行文件与 pipx 的应用路径是同一个文件，再从该环境查询真实版本。不同 Python 环境、路径不明、指定转换器或版本无法核验时，停止自动安装并指出原因；不能为了补一个格式创建第二套不生效的环境，也不能降级已有转换器。检查参数与安装参数互斥。
