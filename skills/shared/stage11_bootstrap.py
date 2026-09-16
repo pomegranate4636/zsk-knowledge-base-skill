@@ -110,7 +110,8 @@ class FirstRunBootstrap:
                 return {"backend": "feishu", "name": name, "target": "无法确认同名空间"}, "readback_failed"
             if existing:
                 return {"backend": "feishu", "name": name, "target": "已有同名私有知识空间"}, "binding_conflict"
-            return {"backend": "feishu", "name": name, "target": "将在你的飞书账号下创建私有知识空间"}, None
+            return {"backend": "feishu", "name": name, "target": "将在你的飞书账号下创建私有知识空间",
+                    "permission_check": "连接已检查；实际创建和写入由飞书逐项校验权限，失败即停止并报告已创建对象。"}, None
         root = Path(parent) if parent else self._default_documents_parent()
         if not self._safe_directory(root):
             return {"backend": "obsidian", "name": name, "target": str(root)}, "binding_missing"

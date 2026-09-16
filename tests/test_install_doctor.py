@@ -134,7 +134,7 @@ class InstallDoctorTests(unittest.TestCase):
         self.assertIn("markitdown-skill", install.COMPONENTS)
         self.assertTrue((ROOT / "skills" / "markitdown-skill" / "SKILL.md").is_file())
 
-    def test_failed_markitdown_install_rolls_back_new_components(self) -> None:
+    def test_failed_markitdown_install_keeps_bootstrap_components(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             destination = Path(folder) / "skills"
             unrelated = destination / "existing-skill"
@@ -145,7 +145,7 @@ class InstallDoctorTests(unittest.TestCase):
                         self.assertEqual(install.main(), 6)
             self.assertTrue(unrelated.is_dir())
             for name in install.COMPONENTS:
-                self.assertFalse((destination / name).exists())
+                self.assertTrue((destination / name).exists())
             rendered = "".join(call.args[0] for call in stdout.write.call_args_list if call.args)
             self.assertNotIn("安装完成", rendered)
 

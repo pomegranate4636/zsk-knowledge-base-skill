@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import platform
@@ -12,6 +13,8 @@ import subprocess
 import sys
 
 from skills.shared.oral_structure_preset import PresetError, load_preset
+from skills.shared.markdown_converter import markitdown_status, _version
+from skills.shared.converter_probe import FORMATS, probe_formats
 
 
 COMPONENTS = (
@@ -23,7 +26,6 @@ COMPONENTS = (
     "markitdown-skill",
     "shared",
 )
-MARKITDOWN_SPEC = "markitdown[docx,pdf,pptx,xlsx]==0.1.6"
 MARKITDOWN_INSTALL_TIMEOUT_SECONDS = 600
 SHARED_REQUIRED_FILES = (
     "__init__.py",
@@ -40,6 +42,7 @@ SHARED_REQUIRED_FILES = (
     "feishu_cli.py",
     "feishu_stage5.py",
     "markdown_converter.py",
+    "converter_probe.py",
     "naming.py",
     "obsidian_adapter.py",
     "obsidian_stage6.py",
@@ -129,46 +132,49 @@ def installed_state(destination: Path) -> tuple[list[str], list[str]]:
 
 
 def converter_version() -> str | None:
-    executable = shutil.which("markitdown")
-    if not executable:
-        return None
-    try:
-        completed = subprocess.run((executable, "--version"), capture_output=True, text=True, timeout=15, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    return completed.stdout.strip() if completed.returncode == 0 and completed.stdout.strip() else None
+    status = markitdown_status()
+    return status.version if status else None
 
 
-def install_converter() -> bool:
+def install_converter(formats: tuple[str, ...] = ("docx", "pdf", "pptx", "xlsx")) -> bool:
+    readiness = probe_formats(formats)
+    missing = tuple(kind for kind, ready in readiness.items() if not ready)
+    if not missing:
+        print("已复用现有 MarkItDown，所需格式转换通过；无需下载。")
+        return True
+    if os.environ.get("ZSK_MARKITDOWN_BIN"):
+        print("指定的 ZSK_MARKITDOWN_BIN 未通过格式检查；请修复该转换器的环境，不另装到不相关环境。", file=sys.stderr)
+        return False
     pipx = shutil.which("pipx")
     if not pipx:
-        print("未找到 pipx，无法自动安装 MarkItDown。请先安装 pipx 后重试。", file=sys.stderr)
+        print("未找到 pipx，无法补齐转换依赖；建库不受影响。安装说明：https://github.com/microsoft/markitdown", file=sys.stderr)
         return False
-    command = (pipx, "inject", "--force", "markitdown", MARKITDOWN_SPEC) if converter_version() else (pipx, "install", MARKITDOWN_SPEC)
-    print("正在安装 MarkItDown 文档转换依赖，首次下载可能需要几分钟……")
+    extras = tuple(kind for kind in missing if kind in {"docx", "pdf", "pptx", "xlsx"})
+    spec = "markitdown" + ("[" + ",".join(extras) + "]" if extras else "") + "==0.1.6"
+    # Reuse pipx's own environment, never inject into an unrelated executable.
     try:
-        completed = subprocess.run(
-            command,
-            timeout=MARKITDOWN_INSTALL_TIMEOUT_SECONDS,
-            check=False,
-            capture_output=True,
-            text=True,
-            errors="replace",
-        )
-    except subprocess.TimeoutExpired:
-        print("MarkItDown 下载超过 10 分钟，已停止。请检查网络后重新执行安装。", file=sys.stderr)
+        info = subprocess.run((pipx, "list", "--json"), capture_output=True, text=True, timeout=15, check=False)
+        payload = json.loads(info.stdout) if info.returncode == 0 else None
+        environments = payload.get("venvs", {}) if isinstance(payload, dict) else None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        environments = None
+    if not isinstance(environments, dict):
+        print("无法检查 pipx 环境，未安装。", file=sys.stderr)
         return False
-    except OSError as exc:
-        print(f"无法启动 MarkItDown 安装命令：{exc}", file=sys.stderr)
+    command = (pipx, "runpip", "markitdown", "install", spec) if "markitdown" in environments else (pipx, "install", spec)
+    print("正在补齐转换格式：" + "、".join(missing) + "；首次下载可能需要几分钟……")
+    try:
+        completed = subprocess.run(command, timeout=MARKITDOWN_INSTALL_TIMEOUT_SECONDS,
+                                   check=False, capture_output=True, text=True, errors="replace")
+    except (OSError, subprocess.TimeoutExpired):
+        print("转换依赖安装未完成；保留已有 ZSK，稍后重试依赖安装即可。", file=sys.stderr)
         return False
     if completed.returncode != 0:
-        print(f"MarkItDown 安装失败（退出码 {completed.returncode}）。", file=sys.stderr)
         _print_command_output(completed)
-        print("请检查网络、pipx 和安全软件拦截记录后重试。", file=sys.stderr)
         return False
-    version = converter_version()
-    if not version:
-        print("MarkItDown 安装命令已结束，但转换器仍不可用。请重新打开终端后运行 --doctor。", file=sys.stderr)
+    _version.cache_clear()
+    if not all(probe_formats(formats).values()):
+        print("安装已结束，但所需格式转换未全部通过；不能报告依赖就绪。", file=sys.stderr)
         return False
     return True
 
@@ -181,14 +187,6 @@ def _print_command_output(completed: subprocess.CompletedProcess[str]) -> None:
     print("安装工具返回：", file=sys.stderr)
     for line in lines[-20:]:
         print(f"  {line}", file=sys.stderr)
-
-
-def rollback_fresh_install(destination: Path) -> None:
-    """回滚本次刚复制的 ZSK 组件；只在 install() 已完整成功后调用。"""
-    for name in reversed(COMPONENTS):
-        target = destination / name
-        if target.is_dir() and not target.is_symlink():
-            shutil.rmtree(target)
 
 
 def page_evidence_status() -> dict[str, bool | str | None]:
@@ -353,14 +351,17 @@ def print_install_success(destination: Path) -> None:
     present, _ = installed_state(destination)
     print(f"安装完成：{destination}")
     print("已安装：" + "、".join(present))
-    print("请重新打开一个 Codex / WorkBuddy 任务，再检查 zsk-router。")
+    print("请按当前宿主要求刷新技能或重新打开任务，再检查 zsk-router（包括 shared 与预置资源）。")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="安装完整的 ZSK 知识库 Skill 组合")
-    parser.add_argument("--dest", type=Path, default=default_destination(), help="目标 Skills 目录")
+    parser.add_argument("--dest", type=Path, help="宿主实际持久 Skills 目录；非 Codex 宿主必须显式提供")
+    parser.add_argument("--host", choices=("codex", "workbuddy", "doubao", "other"), default="codex")
+    parser.add_argument("--formats", help="仅检查/安装所需格式，如 docx,pdf；省略时 doctor 仅检查建库组件")
+    parser.add_argument("--dependencies-only", action="store_true", help="仅补转换依赖，不复制或覆盖 Skills")
     parser.add_argument("--check", action="store_true", help="只检查目标目录，不写入")
-    parser.add_argument("--doctor", action="store_true", help="检查完整组件与 MarkItDown 转换器，不写入")
+    parser.add_argument("--doctor", action="store_true", help="检查建库组件；配合 --formats 检查指定格式，不处理客户资料")
     parser.add_argument("--package-check", action="store_true", help="检查当前安装包结构，不写入")
     parser.add_argument("--install-markitdown", action="store_true", help="安装或补齐 MarkItDown 最小格式依赖")
     args = parser.parse_args()
@@ -377,7 +378,16 @@ def main() -> int:
         print("安装包结构：完整")
         return 0
 
-    destination = args.dest.expanduser().resolve()
+    formats = tuple(dict.fromkeys(part.strip().lower() for part in args.formats.split(","))) if args.formats else ()
+    if any(kind not in FORMATS for kind in formats):
+        parser.error("--formats 仅支持 " + ",".join(FORMATS))
+    if args.dependencies_only:
+        if not formats:
+            parser.error("--dependencies-only 需要 --formats 指定本次所需格式")
+        return 0 if install_converter(formats) else 6
+    if args.host != "codex" and args.dest is None:
+        parser.error("此宿主需要 --dest 指定已核实的持久 Skills 目录，不默认写入 Codex 目录")
+    destination = (args.dest or default_destination()).expanduser().resolve()
     if args.check:
         present, missing = installed_state(destination)
         print(f"检查目录：{destination}")
@@ -388,15 +398,18 @@ def main() -> int:
     if args.doctor:
         present, missing = installed_state(destination)
         version = converter_version()
+        readiness = probe_formats(formats) if formats else {}
         pages = page_evidence_status()
         ocr = local_ocr_status()
         print("组件：" + ("齐全" if not missing else "缺少 " + "、".join(missing)))
-        print("MarkItDown：" + (version or "不可用"))
+        print("MarkItDown：" + (version or "未就绪（不影响建库与 MD/TXT/CSV 入库）"))
+        for kind, ready in readiness.items():
+            print(f"{kind} 转换：" + ("通过" if ready else "未通过，需补齐该格式依赖"))
         pptx_state = "不可用" if not pages["pptx"] else f"可用（{pages['pptx_engine']}）"
         print("页级证据（可选）：PDF " + ("可用" if pages["pdf"] else "不可用") + "；PPTX " + pptx_state)
         language_text = "+".join(ocr["languages"]) if ocr["languages"] else "无"
         print("本地 OCR（页级证据增强）：" + (f"可用（{ocr['engine']}；{language_text}）" if ocr["ready"] else f"不可用（语言：{language_text}）"))
-        return 0 if not missing and version else 1
+        return 0 if not missing and all(readiness.values()) else 1
 
     source_root = Path(__file__).resolve().parent / "skills"
     result = install(source_root, destination)
@@ -405,9 +418,8 @@ def main() -> int:
     if not args.install_markitdown:
         print_install_success(destination)
         return 0
-    if not install_converter():
-        rollback_fresh_install(destination)
-        print("MarkItDown 未就绪，本次新增的 ZSK 组件已回滚；没有留下半安装状态。", file=sys.stderr)
+    if not install_converter(formats or ("docx", "pdf", "pptx", "xlsx")):
+        print("ZSK 组件已保存，可建库；转换依赖未就绪，富文档入库不可用。用 --dependencies-only --formats 重试。", file=sys.stderr)
         return 6
     print_install_success(destination)
     print("MarkItDown 已就绪：" + (converter_version() or "未知版本"))
