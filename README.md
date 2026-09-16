@@ -1,6 +1,6 @@
 # ZSK Knowledge Base Skill
 
-一套面向 Codex / WorkBuddy 的通用知识库 Skill 组合。公开入口只有 `zsk-router`，其余组件负责资料登记、业务知识、参考方法和主体资料的安全处理。
+一套面向豆包工作 / Codex / WorkBuddy 的通用知识库 Skill 组合。公开入口只有 `zsk-router`，其余组件负责资料登记、业务知识、参考方法和主体资料的安全处理。
 
 ## 仓库定位
 
@@ -101,71 +101,68 @@ python3 tools/verify_content_source_v1.py \
 
 客户不需要手工选择资料应该放 03、04 还是 05。同一份资料可以拆出业务事实、通用方法和主体资料，分别入库；机器指纹只留在元数据中，客户看到的是“日期＋中文标题”的目录和文件名。分类拿不准时留在 01，不把普通分类问题塞进 02。
 
-## 课堂上只说这一句话
+## 一个地址完成自助安装
 
-把下面这句话完整发给 Codex 或 WorkBuddy：
+把下面这句话发给豆包工作、Codex 或 WorkBuddy，不需要讲师分发文件：
 
-> 请从 https://github.com/slbb1995/zsk-knowledge-base-skill 安装完整的 ZSK 知识库 Skill 组合及 MarkItDown 配套 Skill。先阅读仓库 README，不覆盖任何已有同名目录；安装到你当前正在使用的 Skills 目录，并补齐 MarkItDown 的 DOCX、PPTX、XLSX、PDF 转换依赖。安装后检查 zsk-router、zsk-ruku、zsk-zhishi、zsk-duibiao、zsk-profile、markitdown-skill 和 shared 是否齐全，并告诉我是否需要重新打开当前任务。
+> 请从 https://github.com/slbb1995/zsk-knowledge-base-skill 获取完整 ZSK 项目，先读 README，再安装到当前宿主已核实的持久 Skills 目录，不覆盖同名目录。检查六个 Skill、shared 和口播预置资源完整可加载。先复用宿主已有飞书能力，缺失时按 https://github.com/larksuite/cli 官方说明补齐；豆包已有账号绑定时不要重复安装或登录。现在只准备建库，暂不下载文档转换依赖；首次上传富文档时再检查并补齐所需格式。告诉我是否需要刷新技能或重新打开任务。
 
-安装完成后，重新打开一个任务，再发送：
+安装后发送：
 
-> 请检查 zsk-router 是否已经可以使用，并告诉我当前是否具备连接飞书和创建个人知识库的条件。先检查，不要创建。
+> 请使用 zsk-router 检查当前是否具备创建知识库的条件，先检查，不要创建。
 
-## 开始前的前置条件
+## 宿主和飞书连接
 
-- 电脑上已经可以使用 Codex 或 WorkBuddy。
-- WorkBuddy 已经连接本人飞书账号。
-- 当前账号具备创建飞书知识库的权限。
-- 如果使用飞书后端，本机需要有可用的 `lark-cli`，并完成用户身份授权。
+详细规则见 [宿主接入与按需依赖](skills/zsk-router/references/host-setup.md)。
 
-这些条件没有通过时，ZSK 会准确停止，不会假装已经创建或写入。
+- 豆包工作：优先复用内置 CLI 和本人飞书绑定；不因没有独立 `auth` 命令而要求重装。必须在豆包实际执行环境中核验。
+- Codex、WorkBuddy 或其他平台：同样先检查已有能力，缺失才从 [飞书 CLI 官方仓库](https://github.com/larksuite/cli) 按当前安装说明补齐并授权。
+- Obsidian 本地知识库：不要求安装或授权飞书。
+- 账号已绑定只代表身份可验证，不保证创建空间、写入文档的权限；宿主未暴露 scopes 时如实显示“写权限尚未预验证”，后续真实调用由飞书逐项校验，失败停止并报告已有对象。
+- 当前 Python 运行层使用可执行 `lark-cli`，不把仅有连接器名称当成兼容性通过。
 
-## 手动安装
+## 手动安装与复测
 
-默认安装到 `~/.codex/skills`：
+Codex 默认目录：
 
 ```bash
 git clone https://github.com/slbb1995/zsk-knowledge-base-skill.git
-python3 zsk-knowledge-base-skill/install.py --install-markitdown
-```
-
-安装到其他 Skills 目录：
-
-```bash
-python3 zsk-knowledge-base-skill/install.py --dest /你的/Skills/目录 --install-markitdown
-```
-
-只检查、不写入：
-
-```bash
-python3 zsk-knowledge-base-skill/install.py --check
-```
-
-安装器不会覆盖已有同名目录。发现冲突时会停止，并列出需要人工处理的目录。
-
-如果 MarkItDown 下载失败，安装器会显示安装工具返回的最后错误，并回滚本次新增的 ZSK 组件，不会留下“Skill 看似已安装、Office/PDF 实际不能入库”的半安装状态。检查网络后重新执行同一条安装命令即可。
-
-Windows 出现安全软件拦截 `lark-cli.CMD` 或其可信 Node.js 运行程序时，不要直接关闭或卸载全部安全软件。先核对文件来自已安装的飞书 CLI，再只对该可信路径放行；无法确认来源时停止飞书操作并请现场管理员处理。
-
-## 文档转换前置条件
-
-ZSK 不让大模型直接读取 Office 或 PDF。安装包内含 `markitdown-skill`，它是必装配套能力但不是客户业务入口。MD/TXT/CSV 可直接入库；DOCX、PPTX、XLSX、PDF、HTML、JSON 由 Microsoft MarkItDown 在本机转换为唯一正式 `readable.md`。
-
-首次安装后，用最小格式集合安装并检查转换器；不使用 `markitdown[all]`，因为页图 OCR 由 ZSK 的独立本地 Provider 负责，音视频和联网扩展不属于当前版本：
-
-```bash
-python3 zsk-knowledge-base-skill/install.py --install-markitdown
+python3 zsk-knowledge-base-skill/install.py
 python3 zsk-knowledge-base-skill/install.py --doctor
 ```
 
-若已安装基础版 MarkItDown：
+其他宿主显式指定已核实的持久目录（将示例路径替换为当前环境的真实路径）：
 
 ```bash
-pipx inject --force markitdown 'markitdown[docx,pdf,pptx,xlsx]==0.1.6'
-python3 zsk-knowledge-base-skill/install.py --doctor
+python3 zsk-knowledge-base-skill/install.py --host doubao --dest /已核实的持久Skills目录
+python3 zsk-knowledge-base-skill/install.py --host doubao --dest /已核实的持久Skills目录 --doctor
 ```
 
-Doctor 未通过时，富文档会准确停止并进入 02；不会静默换用另一套解析器，也不会把资料交给大模型。Doctor 还会分别显示 PDF/PPTX 页级渲染与本地 OCR 状态；这些增强能力不可用不会阻断普通文字入库，但启用完整页证据时会 fail closed。
+`--host` 可选 `codex`、`workbuddy`、`doubao`、`other`。非 Codex 未提供 `--dest` 时停止，防止装到错误宿主。检查完整目录后，还需按宿主实际方式刷新技能或重开任务验证加载；只在当前任务读到 SKILL.md 不能证明重开后仍可用。
+
+安装器不覆盖同名组件；发现冲突时先核对完整版本，再决定保留或更新。更新不可拼接不同版本的 shared 与入口。
+
+## 文档转换按需准备
+
+`markitdown-skill` 说明随 ZSK 分发；MarkItDown 程序及格式依赖按需准备。创建知识库和 MD/TXT/CSV 入库不依赖该程序。DOCX、PPTX、XLSX、PDF、HTML、JSON 仍统一用 [Microsoft MarkItDown](https://github.com/microsoft/markitdown) 转换，不静默换解析器。
+
+例如第一次只上传 Word 和 PDF：
+
+```bash
+python3 zsk-knowledge-base-skill/install.py --dependencies-only --formats docx,pdf
+python3 zsk-knowledge-base-skill/install.py --doctor --formats docx,pdf
+```
+
+其他宿主检查已安装组件时仍需传 `--host` 和 `--dest`。依赖补齐命令不复制 Skills，不需要重装已存在组件。
+
+- 合成文件转换已通过：复用现有程序，零下载。
+- 格式未通过：先核对当前可执行文件确实属于该 pipx 环境，保留当前版本补对应格式；新装使用验证版本。环境不一致则停止并提示，不降级、不另装无效副本。复用 pip/pipx 缓存，不使用 `--force` 或 `markitdown[all]`。
+- 首次安装要提前准备全部 Office/PDF 时，仍可显式用 `--install-markitdown`，也可配 `--formats` 缩小范围。
+- 下载失败：保留已完整安装的 ZSK，明确“可建库，富文档未就绪”，稍后仅重试依赖。
+- `--doctor` 不带格式只检查建库组件完整性；带格式才以实际转换检查对应能力，不再仅凭 `--version` 判定。
+- OCR/页渲染始终是可选增强；完整页证据模式需要另行通过其检查。
+
+Windows 安全软件若拦截 CLI，只核实并处理可信程序的具体路径，不要求关闭全部防护。
 
 ## 当前范围与后续范围
 
@@ -182,6 +179,10 @@ Doctor 未通过时，富文档会准确停止并进入 02；不会静默换用�
 - `zsk-profile`：整理主体确认事实、运营设定和候选素材。
 - `markitdown-skill`：必装的 Microsoft MarkItDown 转换说明与运行边界；供 ZSK 后台和独立文档转换复用，不是第二个入库入口。
 - `shared`：以上组件共用的合同、格式读取和飞书／Obsidian 适配代码。
+
+## 建库确认如何跨次执行
+
+首次预览把一次性确认摘要保存在宿主本机持久状态目录（默认 `~/.zsk/confirmations`，可配置 `ZSK_STATE_DIR`）。用户确认后可在另一个 Python 进程继续，使用同一状态目录与任务 ID；30 分钟内有效，消费后不可重放。飞书确认绑定当前用户和租户，账号变化时必须重新预览。只存摘要与期限，不保存凭据或客户正文；本机记录失败则不建库。
 
 ## 第一次使用示例
 

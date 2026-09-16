@@ -7,8 +7,10 @@ import json
 import os
 from pathlib import Path
 import stat
+import sqlite3
 from typing import Any
 
+from .confirmation_store import ConfirmationStore
 from .contracts import BINDING_SCHEMA, ROOT_KEYS, TASK_ID, Binding
 from .content_source_contract import (
     ContentSourceContractError,
@@ -61,10 +63,10 @@ class BootstrapResponse:
 class FirstRunBootstrap:
     """只在用户明确建库并确认预览后创建；失败不回退到隐式默认位置。"""
 
-    def __init__(self, *, runner: CliRunner | None = None, documents_parent: Path | None = None) -> None:
+    def __init__(self, *, runner: CliRunner | None = None, documents_parent: Path | None = None, confirmation_dir: Path | None = None) -> None:
         self.runner = runner or SubprocessCliRunner()
         self.documents_parent = documents_parent
-        self._issued: set[str] = set()
+        self.confirmations = ConfirmationStore(confirmation_dir)
 
     def execute(self, request: BootstrapRequest) -> BootstrapResponse:
         if classify_intent(request.user_input) != "create":
@@ -89,13 +91,24 @@ class FirstRunBootstrap:
         except PresetError as exc:
             return BootstrapResponse("blocked", exc.code, str(exc) + " 未创建知识库。", preview, None, None)
         preview = self._preset_preview(preview, preset)
-        token = self._token(request.backend_type, client_name, name, preview["target"], preset.sha256)
-        if request.confirmation != token:
-            self._issued.add(token)
-            return BootstrapResponse("confirmation_required", None, "请确认名称、目标位置及包含完整口播结构库的建库内容；确认后一起创建。", preview, token, None)
-        if token not in self._issued:
-            return BootstrapResponse("blocked", "confirmation_mismatch", "确认信息无效或已过期，未创建。", preview, None, None)
-        self._issued.remove(token)
+        digest = hashlib.sha256(json.dumps({
+            "task": request.task_id, "backend": request.backend_type, "client": client_name,
+            "name": name, "target": preview["target"], "template": TEMPLATE_VERSION,
+            "preset": preset.sha256, "account": preview.get("account_fingerprint", "local"),
+        }, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        try:
+            if request.confirmation is None:
+                token = self.confirmations.issue(digest)
+                return BootstrapResponse("confirmation_required", None, "请确认名称、目标位置及包含完整口播结构库的建库内容；确认在 30 分钟内有效。", preview, token, None)
+            code = self.confirmations.consume(request.confirmation, digest)
+        except (OSError, sqlite3.Error):
+            return BootstrapResponse("blocked", "write_failed", "本机确认记录不可用，未创建。", preview, None, None)
+        if code:
+            return BootstrapResponse("blocked", code, "确认已失效、已使用或账号/目标发生变化。请重新预览并确认，未创建。", preview, None, None)
+        if request.backend_type == "feishu":
+            account = FeishuAdapter(self.runner).current_account()
+            if account.status != "ok" or account.metadata.get("account_fingerprint") != preview.get("account_fingerprint"):
+                return BootstrapResponse("blocked", "confirmation_mismatch", "创建前飞书账号发生变化或无法验证，请重新预览。", preview, None, None)
         if request.backend_type == "obsidian":
             return self._create_obsidian(client_name, name, Path(preview["target"]), preset)
         return self._create_feishu(client_name, name, preset)
@@ -110,7 +123,12 @@ class FirstRunBootstrap:
                 return {"backend": "feishu", "name": name, "target": "无法确认同名空间"}, "readback_failed"
             if existing:
                 return {"backend": "feishu", "name": name, "target": "已有同名私有知识空间"}, "binding_conflict"
-            return {"backend": "feishu", "name": name, "target": "将在你的飞书账号下创建私有知识空间"}, None
+            account = FeishuAdapter(self.runner).current_account()
+            if account.status != "ok":
+                return {"backend": "feishu", "name": name, "target": "当前账号无法验证"}, account.code
+            return {"backend": "feishu", "name": name, "target": "将在你的飞书账号下创建私有知识空间",
+                    "account_fingerprint": account.metadata["account_fingerprint"],
+                    "permission_check": "连接已检查；实际创建和写入由飞书逐项校验权限，失败即停止并报告已创建对象。"}, None
         root = Path(parent) if parent else self._default_documents_parent()
         if not self._safe_directory(root):
             return {"backend": "obsidian", "name": name, "target": str(root)}, "binding_missing"
@@ -217,10 +235,6 @@ class FirstRunBootstrap:
             return stat.S_ISDIR(os.lstat(path).st_mode)
         except OSError:
             return False
-
-    @staticmethod
-    def _token(backend: str, client_name: str, name: str, target: str, preset_sha256: str) -> str:
-        return hashlib.sha256(f"{backend}\n{client_name}\n{name}\n{target}\n{TEMPLATE_VERSION}\n{preset_sha256}".encode()).hexdigest()[:24]
 
     @staticmethod
     def _client_id(locator: str) -> str:

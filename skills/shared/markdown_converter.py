@@ -128,6 +128,16 @@ def _version(executable: str) -> str:
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ConverterUnavailable("MarkItDown version cannot be checked") from exc
     value = completed.stdout.strip()
-    if completed.returncode != 0 or not value:
-        raise ConverterUnavailable("MarkItDown version cannot be checked")
-    return value
+    if completed.returncode == 0 and value:
+        return value
+    # Some supported distributions omit --version. Verify the same executable's
+    # CLI surface, then let the actual format conversion decide availability.
+    try:
+        help_result = subprocess.run(
+            (executable, "--help"), capture_output=True, text=True, timeout=15, check=False, shell=False
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ConverterUnavailable("MarkItDown cannot be started") from exc
+    if help_result.returncode != 0 or "markitdown" not in help_result.stdout.lower():
+        raise ConverterUnavailable("MarkItDown CLI cannot be verified")
+    return "unreported (CLI verified; --version unsupported)"

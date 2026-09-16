@@ -63,8 +63,8 @@ class NewVaultPresetTests(unittest.TestCase):
             changed = replace(load_preset(), version="1.0.1", sha256="a" * 64)
             with mock.patch("shared.stage11_bootstrap.load_preset", return_value=changed):
                 result = bootstrap.execute(BootstrapRequest(TASK_ID, "创建知识库", "obsidian", "测试库", confirmation=preview.confirmation))
-            self.assertEqual(result.status, "confirmation_required")
-            self.assertNotEqual(result.confirmation, preview.confirmation)
+            self.assertEqual((result.status, result.code), ("blocked", "confirmation_mismatch"))
+            self.assertIsNone(result.confirmation)
             self.assertEqual(list(Path(directory).iterdir()), [])
 
     def test_preview_and_new_vault_have_complete_independent_preset(self):

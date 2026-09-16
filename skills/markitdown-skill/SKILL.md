@@ -2,7 +2,7 @@
 name: markitdown-skill
 description: 将 PDF、Word、PowerPoint、Excel、HTML 和 JSON 转为 Markdown 的 Microsoft MarkItDown 配套 Skill。供 ZSK 后台资料入库及独立文档转换使用；不负责知识库路由、分类、保存或发布。
 metadata:
-  short-description: 文档转 Markdown 的 ZSK 必装配套能力
+  short-description: 文档转 Markdown 的 ZSK 按需转换能力
   requires:
     bins:
       - markitdown
@@ -27,10 +27,12 @@ metadata:
 markitdown document.pdf -o readable.md
 ```
 
-运行 `python3 install.py --doctor` 检查 ZSK 组件和 MarkItDown。若需要补齐最小转换依赖，运行：
+建库和 MD/TXT/CSV 入库不需要下载转换程序。首次富文档入库时按实际格式检查，例如 `python3 install.py --doctor --formats docx,pdf`（非 Codex 宿主须提供实际 `--host`、`--dest`）。只有所需格式未通过才运行：
 
 ```bash
-python3 install.py --install-markitdown
+python3 install.py --dependencies-only --formats docx,pdf
 ```
+
+安装器使用合成文件验证格式，已可转换则零下载；缺失才按固定验证版本补对应依赖，不强制重装全套。下载失败保留可用的建库组件。`--version` 不支持时不直接判定不可用：验证 CLI，再实测转换；版本未报告时如实标记，不编造版本。
 
 ZSK 可在页面视觉影响含义或客户已配置保留完整页面时，为 PDF/PPTX 启用独立的完整页证据模式。当前绑定中客户主动提交的文件默认允许处理与保留原件。该模式由 shared 页渲染器、PPT 原生文字提取器和多次本地 OCR 一致性验证负责，不改变 MarkItDown 的文字转换职责；Windows 或 macOS 检测到 Microsoft PowerPoint 时优先使用其原生导出，LibreOffice 仅作为无原生后端时的备用。OCR 只处理页图，不联网；无法自动可靠还原时整份资料零写入，自动图片描述和猜测式图文映射仍不在范围内。

@@ -15,8 +15,10 @@ from .content_source_contract import (
     validate_profile_index,
 )
 from .feishu_cli import CliRunner, SubprocessCliRunner
+
 from .feishu_stage5 import FeishuStage5Storage
 from .templates import ROOT_TITLES, root_content
+FEISHU_CLI_SOURCE = "https://github.com/larksuite/cli"
 _WIKI_TOKEN = re.compile(r"^[A-Za-z0-9_-]+$")
 _SPACE_ID = re.compile(r"^[0-9]+$")
 _MIN_CLI_VERSION = (1, 0, 89)
@@ -56,21 +58,65 @@ class FeishuAdapter:
         self._asset_refs: dict[str, BackendObjectRef] = {}
     def doctor(self) -> AdapterResult:
         version = self._runner.run(("lark-cli", "--version"))
-        parsed = re.fullmatch(r"lark-cli version (\d+)\.(\d+)\.(\d+)", version.stdout.strip())
+        parsed = re.fullmatch(r"lark-cli version v?(\d+)\.(\d+)\.(\d+)(?:\+[0-9A-Za-z.-]+)?", version.stdout.strip())
         if version.returncode != 0 or not parsed:
-            return AdapterResult.failed("feishu_cli_missing", "Feishu CLI is unavailable.", blocked=True)
+            return AdapterResult.failed("feishu_cli_missing", "Feishu CLI is unavailable or its version is unrecognized. Reuse the host CLI first; installation guide: " + FEISHU_CLI_SOURCE, blocked=True)
         if tuple(int(part) for part in parsed.groups()) < _MIN_CLI_VERSION:
             return AdapterResult.failed("dependency_missing", "Feishu CLI is below the stage 3 minimum version.", blocked=True)
-        status, failure = self._json(("lark-cli", "auth", "status", "--verify", "--json"), "feishu_auth_missing")
+        auth_response = self._runner.run(("lark-cli", "auth", "status", "--verify", "--json"))
+        # Only an absent command enables hosted auth. An expired token, denied
+        # scope, malformed response or network failure must never take this path.
+        auth_error = self._error_payload(auth_response.stdout) or self._error_payload(auth_response.stderr)
+        error = auth_error.get("error", {}) if auth_error else {}
+        error_message = error.get("message", "") if isinstance(error, dict) else ""
+        absent_command = re.search(
+            r"unknown command [\"'](?:auth|status)[\"']",
+            auth_response.stderr + "\n" + str(error_message),
+        )
+        if auth_response.returncode != 0 and absent_command:
+            return self._hosted_identity()
+        status, failure = self._decode_response(auth_response, "feishu_auth_missing")
         if failure:
             return failure
-        user = status.get("identities", {}).get("user", {}) if isinstance(status, dict) else {}
+        identities = status.get("identities", {}) if isinstance(status, dict) else {}
+        user = identities.get("user", {}) if isinstance(identities, dict) else {}
+        user = user if isinstance(user, dict) else {}
         scopes = set(str(user.get("scope", "")).split()) if isinstance(user, dict) else set()
         if user.get("status") != "ready" or user.get("tokenStatus") != "valid" or user.get("verified") is not True:
             return AdapterResult.failed("feishu_auth_missing", "User identity or token is not ready.", blocked=True)
         if not _REQUIRED_SCOPES.issubset(scopes):
             return AdapterResult.failed("permission_denied", "Required Feishu scopes are missing.", blocked=True)
         return AdapterResult.ok(checked=("feishu_cli_version", "user_identity_ready", "user_token_valid", "required_scopes"))
+
+    def _hosted_identity(self) -> AdapterResult:
+        identity, failure = self._json(
+            ("lark-cli", "--as", "user", "contact", "+get-user", "--format", "json"),
+            "feishu_auth_missing",
+        )
+        if failure:
+            return failure
+        user = identity.get("user", identity)
+        if not isinstance(user, dict) or not isinstance(user.get("open_id"), str) or not user["open_id"].strip():
+            return AdapterResult.failed("feishu_auth_missing", "Host did not return a stable current user identity.", blocked=True)
+        # Identity lookup is not a scope grant. Real Wiki/Docs calls retain their
+        # server-side permission checks and readback; do not invent a scope list.
+        return AdapterResult.ok(
+            checked=("feishu_cli_version", "host_user_identity_verified"),
+            metadata={"auth_mode": "host_managed", "write_permissions": "not_preverified"},
+        )
+
+    def current_account(self) -> AdapterResult:
+        data, failure = self._json(
+            ("lark-cli", "--as", "user", "contact", "+get-user", "--format", "json"),
+            "feishu_auth_missing",
+        )
+        if failure:
+            return failure
+        user = data.get("user", data)
+        if not isinstance(user, dict) or not all(isinstance(user.get(key), str) and user[key].strip() for key in ("open_id", "tenant_key")):
+            return AdapterResult.failed("feishu_auth_missing", "Cannot bind confirmation without current user and tenant identity.", blocked=True)
+        fingerprint = hashlib.sha256(json.dumps([user["tenant_key"], user["open_id"]], ensure_ascii=False).encode()).hexdigest()
+        return AdapterResult.ok(metadata={"account_fingerprint": fingerprint})
 
     def resolve_binding(self, binding: Binding) -> AdapterResult:
         if binding.backend_type != "feishu":
@@ -458,6 +504,9 @@ class FeishuAdapter:
 
     def _json(self, argv: Sequence[str], fallback: str, *, stdin: str | None = None) -> tuple[dict[str, Any], AdapterResult | None]:
         response = self._runner.run(argv, stdin=stdin)
+        return self._decode_response(response, fallback)
+
+    def _decode_response(self, response: Any, fallback: str) -> tuple[dict[str, Any], AdapterResult | None]:
         payload = self._error_payload(response.stdout) or self._error_payload(response.stderr)
         if response.returncode != 0:
             return {}, self._failure(payload, fallback)

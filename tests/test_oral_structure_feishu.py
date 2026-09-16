@@ -56,6 +56,8 @@ class WikiContractRunner:
         if argv == ("lark-cli", "auth", "status", "--verify", "--json"):
             return self.response({"identities": {"user": {"status": "ready", "tokenStatus": "valid", "verified": True,
                                                            "scope": " ".join(sorted(_REQUIRED_SCOPES))}}})
+        if "+get-user" in argv:
+            return self.response({"data": {"user": {"open_id": "ou_test", "tenant_key": "test_tenant"}}})
         assert argv[:3] == ("lark-cli", "--as", "user"), argv
         assert argv[-2:] == ("--format", "json"), argv
         def flag(name, default=None):
