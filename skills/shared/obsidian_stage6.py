@@ -9,6 +9,7 @@ import stat
 
 from .contracts import AdapterResult, AssetPayload, BackendObjectRef
 from .naming import find_obsidian_source_dir
+from .local_permissions import LIBRARY_DIRECTORY_MODE
 
 
 _UNSAFE = re.compile(r"[\\/\x00-\x1f:]")
@@ -57,7 +58,7 @@ class ObsidianStage6Storage:
                 if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
                     return AdapterResult.failed("structure_conflict", "Knowledge topic path is not a normal directory.", blocked=True)
             else:
-                os.mkdir(directory, 0o700)
+                os.mkdir(directory, LIBRARY_DIRECTORY_MODE)
             path = directory / f"{title}.md"
             payload = asset.body.encode("utf-8")
             if path.exists() or path.is_symlink():

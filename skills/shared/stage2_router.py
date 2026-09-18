@@ -15,6 +15,7 @@ from .contracts import AdapterResult, BINDING_SCHEMA, Binding, ROOT_KEYS, SUBJEC
 from .evidence import RunEvidence
 from .stage5_intake import IntakeRequest, IntakeResponse, Stage5Intake
 from .templates import TEMPLATE_VERSION, template_preview
+from .content_source_contract import ContentSourceContractError, existing_obsidian_client_id
 
 
 PHASE_ID = "ZSK-P2"
@@ -174,7 +175,11 @@ class Stage2Router:
             return self._finish(evidence, intent, "blocked", "binding_missing", None, {}, (), None, "binding_locator_invalid", declaration, blocked=True)
         self._configure_evidence(evidence, request.backend_type, locator, intent)
 
-        binding = self._binding(request, locator)
+        try:
+            binding = self._binding(request, locator)
+        except ContentSourceContractError:
+            return self._finish(evidence, intent, "blocked", "binding_conflict", None, {}, (), None,
+                                "saved_identity_invalid", "已有知识库身份无法安全解析；未创建或修改任何对象。", blocked=True)
         doctor = self.adapter.doctor()
         self._record(evidence, "doctor", doctor, "intent_classified", "doctor_checked")
         if doctor.status not in {"ok", "reused"}:
@@ -238,9 +243,10 @@ class Stage2Router:
         return self._finish(evidence, "create", "created", None, binding.client_id, preview, readback.object_refs, None, reason, declaration)
 
     def _binding(self, request: RouterRequest, locator: str) -> Binding:
+        saved_id = existing_obsidian_client_id(locator) if request.backend_type == "obsidian" and not locator.startswith("fake://") else None
         return Binding(
             schema_version=BINDING_SCHEMA,
-            client_id=stable_client_id(locator),
+            client_id=saved_id or stable_client_id(locator),
             client_name=request.client_name.strip(),
             knowledge_base_name=request.knowledge_base_name.strip(),
             subject_type=request.subject_type,

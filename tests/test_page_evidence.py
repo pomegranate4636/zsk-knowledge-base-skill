@@ -20,7 +20,7 @@ from shared.fake_adapter import FakeAdapter  # noqa: E402
 from shared.feishu_cli import RecordedCliCall, RecordedCliRunner  # noqa: E402
 from shared.feishu_stage5 import FeishuStage5Storage  # noqa: E402
 from shared.markdown_converter import MarkdownConversion  # noqa: E402
-from shared.ocr_provider import OcrResult  # noqa: E402
+from shared.ocr_provider import AutoOcrProvider, OcrResult  # noqa: E402
 from shared.obsidian_adapter import ObsidianAdapter  # noqa: E402
 from shared import page_renderer  # noqa: E402
 from shared.page_renderer import PageRenderFailed, PageRendererUnavailable, RenderedPage, RenderedPages  # noqa: E402
@@ -102,7 +102,7 @@ class PageEvidenceIntakeTests(unittest.TestCase):
     def test_required_pages_are_registered_with_persistent_manifest(self, convert, render) -> None:
         convert.return_value = MarkdownConversion("# PDF\n", "markitdown", "0.1.6")
         render.return_value = rendered()
-        response = Stage5Intake(self.adapter, HighConfidenceOcr()).execute(
+        response = Stage5Intake(self.adapter, AutoOcrProvider((HighConfidenceOcr(), HighConfidenceOcr()))).execute(
             IntakeRequest(
                 TASK_ID,
                 self.binding,
@@ -126,7 +126,7 @@ class PageEvidenceIntakeTests(unittest.TestCase):
     def test_ocr_only_sensitive_text_is_redacted_before_any_write(self, convert, render) -> None:
         convert.return_value = MarkdownConversion("# 普通正文\n", "markitdown", "0.1.6")
         render.return_value = rendered()
-        response = Stage5Intake(self.adapter, SensitiveOcr()).execute(
+        response = Stage5Intake(self.adapter, AutoOcrProvider((SensitiveOcr(), SensitiveOcr()))).execute(
             IntakeRequest(
                 TASK_ID,
                 self.binding,
@@ -220,7 +220,7 @@ class PageEvidenceIntakeTests(unittest.TestCase):
             adapter = ObsidianAdapter()
             adapter.resolve_binding(active_binding)
             adapter.create_skeleton(active_binding)
-            response = Stage5Intake(adapter, HighConfidenceOcr()).execute(
+            response = Stage5Intake(adapter, AutoOcrProvider((HighConfidenceOcr(), HighConfidenceOcr()))).execute(
                 IntakeRequest(
                     TASK_ID,
                     active_binding,
@@ -275,7 +275,7 @@ class PageEvidenceIntakeTests(unittest.TestCase):
             ) as render:
                 convert.return_value = MarkdownConversion("# PDF\n", "markitdown", "0.1.6")
                 render.return_value = rendered()
-                first = Stage5Intake(first_adapter, HighConfidenceOcr()).execute(request)
+                first = Stage5Intake(first_adapter, AutoOcrProvider((HighConfidenceOcr(), HighConfidenceOcr()))).execute(request)
             self.assertEqual((first.status, first.code), ("registered", None))
             before = file_snapshot(folder)
 
@@ -453,7 +453,7 @@ class PageEvidenceIntakeTests(unittest.TestCase):
                 "shared.stage5_intake.convert_to_markdown",
                 return_value=MarkdownConversion("# PDF\n", "markitdown", "0.1.6"),
             ), mock.patch("shared.stage5_intake.render_page_evidence", return_value=rendered()):
-                first = Stage5Intake(first_adapter, HighConfidenceOcr()).execute(approved)
+                first = Stage5Intake(first_adapter, AutoOcrProvider((HighConfidenceOcr(), HighConfidenceOcr()))).execute(approved)
             self.assertEqual((first.status, first.code), ("registered", None))
             fresh_adapter = ObsidianAdapter()
             fresh_adapter.resolve_binding(active_binding)
@@ -489,7 +489,7 @@ class PageEvidenceIntakeTests(unittest.TestCase):
                 "shared.stage5_intake.convert_to_markdown",
                 return_value=MarkdownConversion("# PDF\n", "markitdown", "0.1.6"),
             ), mock.patch("shared.stage5_intake.render_page_evidence", return_value=rendered()):
-                first = Stage5Intake(first_adapter, HighConfidenceOcr()).execute(approved)
+                first = Stage5Intake(first_adapter, AutoOcrProvider((HighConfidenceOcr(), HighConfidenceOcr()))).execute(approved)
             self.assertEqual((first.status, first.code), ("registered", None))
 
             fresh_adapter = ObsidianAdapter()
@@ -550,7 +550,7 @@ class PageEvidenceIntakeTests(unittest.TestCase):
                 "shared.stage5_intake.convert_to_markdown",
                 return_value=MarkdownConversion("# PDF\n", "markitdown", "0.1.6"),
             ), mock.patch("shared.stage5_intake.render_page_evidence", return_value=rendered()):
-                first = Stage5Intake(first_adapter, HighConfidenceOcr()).execute(request)
+                first = Stage5Intake(first_adapter, AutoOcrProvider((HighConfidenceOcr(), HighConfidenceOcr()))).execute(request)
             readable = next((Path(folder) / "01-来源索引" / first.record.display_name).glob("*-可读版.md"))
             content = readable.read_text(encoding="utf-8")
             content = content.replace(
@@ -590,7 +590,7 @@ class PageEvidenceIntakeTests(unittest.TestCase):
                 "shared.stage5_intake.convert_to_markdown",
                 return_value=MarkdownConversion("# PDF\n", "markitdown", "0.1.6"),
             ), mock.patch("shared.stage5_intake.render_page_evidence", return_value=rendered()):
-                first = Stage5Intake(first_adapter, HighConfidenceOcr()).execute(request)
+                first = Stage5Intake(first_adapter, AutoOcrProvider((HighConfidenceOcr(), HighConfidenceOcr()))).execute(request)
             readable = next((Path(folder) / "01-来源索引" / first.record.display_name).glob("*-可读版.md"))
             content = readable.read_text(encoding="utf-8")
             content = content.replace('"page_number": 1', '"page_number": 2', 1)

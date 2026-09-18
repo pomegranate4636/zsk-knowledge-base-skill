@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "skills"))
 from shared.contracts import PageArtifact, PageTextEvidence  # noqa: E402
 from shared import ocr_provider  # noqa: E402
 from shared.ocr_provider import AutoOcrProvider, OcrFailed, OcrResult, OcrUnavailable, TesseractOcrProvider  # noqa: E402
+from shared.ocr_review import OcrReviewGate  # noqa: E402
 from shared.page_text import PptxPageText, build_page_text_evidence, extract_pptx_page_text  # noqa: E402
 from shared.page_renderer import RenderedPage  # noqa: E402
 
@@ -170,14 +171,16 @@ class PageTextEvidenceTests(unittest.TestCase):
 
     def test_only_image_page_uses_local_ocr(self) -> None:
         provider = FakeOcr(0.96)
+        corroborating = FakeOcr(0.95)
         evidence = build_page_text_evidence(
             SOURCE_ID,
             ".pptx",
             pptx_payload(),
             (page(1, PNG_1), page(2, PNG_2)),
-            provider,
+            AutoOcrProvider((provider, corroborating)),
         )
         self.assertEqual(provider.calls, [PNG_2])
+        self.assertEqual(corroborating.calls, [PNG_2])
         self.assertEqual(evidence[0].text_source, "native")
         self.assertEqual(evidence[1].text_source, "ocr")
         self.assertEqual(evidence[1].review_status, "auto_verified")
@@ -281,6 +284,10 @@ class PageTextEvidenceTests(unittest.TestCase):
         self.assertEqual(result.confidence, 0.0)
 
     def test_reviewed_correction_is_hashed_with_page_image(self) -> None:
+        task_id = "01a01e29-a6ba-73a2-82e6-4ad1caa0f33b"
+        gate = OcrReviewGate()
+        preview = gate.preview(task_id, SOURCE_ID, 2, hashlib.sha256(PNG_2).hexdigest(), "人工校对后的文字")
+        receipt = gate.confirm(preview.confirmation)
         evidence = build_page_text_evidence(
             SOURCE_ID,
             ".pptx",
@@ -288,6 +295,9 @@ class PageTextEvidenceTests(unittest.TestCase):
             (page(1, PNG_1), page(2, PNG_2)),
             FakeOcr(0.42),
             corrections={2: "人工校对后的文字"},
+            task_id=task_id,
+            review_gate=gate,
+            correction_approvals={2: receipt},
         )[1]
         self.assertEqual(evidence.review_status, "approved")
         self.assertEqual(evidence.verbatim_text, "人工校对后的文字")

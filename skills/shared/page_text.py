@@ -11,7 +11,8 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 from .contracts import PageTextEvidence
-from .ocr_provider import LocalOcrProvider, OcrFailed, OcrUnavailable, default_auto_ocr_provider
+from .ocr_provider import AutoOcrProvider, LocalOcrProvider, OcrFailed, OcrUnavailable, default_auto_ocr_provider
+from .ocr_review import OcrReviewGate
 from .page_renderer import RenderedPage
 
 
@@ -127,8 +128,11 @@ def build_page_text_evidence(
     *,
     corrections: Mapping[int, str] | None = None,
     confidence_threshold: float = 0.85,
+    task_id: str | None = None,
+    review_gate: OcrReviewGate | None = None,
+    correction_approvals: Mapping[int, str] | None = None,
 ) -> tuple[PageTextEvidence, ...]:
-    if not 0.0 <= confidence_threshold <= 1.0:
+    if not 0.85 <= confidence_threshold <= 1.0:
         raise ValueError("OCR confidence threshold is invalid")
     corrections = dict(corrections or {})
     if suffix == ".pptx":
@@ -166,9 +170,13 @@ def build_page_text_evidence(
             source = "native+ocr" if native else "ocr"
             correction = corrections.get(page_input.page_number, "").strip()
             if correction:
-                verbatim = correction
-                status = "approved"
-            elif confidence >= confidence_threshold and ocr_text:
+                approved = review_gate is not None and review_gate.consume(
+                    (correction_approvals or {}).get(page_input.page_number), task_id, source_id,
+                    page_input.page_number, rendered.artifact.sha256, correction,
+                )
+                verbatim = correction if approved else ""
+                status = "approved" if approved else "review_required"
+            elif isinstance(active_provider, AutoOcrProvider) and confidence >= confidence_threshold and ocr_text:
                 verbatim = _merge_text(native, ocr_text)
                 status = "auto_verified"
             else:

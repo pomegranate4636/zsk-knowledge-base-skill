@@ -19,6 +19,7 @@ from .naming import human_source_label, page_file_name
 from .page_renderer import PageRenderFailed, PageRendererUnavailable, RenderedPage, render_page_evidence
 from .ocr_provider import LocalOcrProvider, OcrFailed, OcrUnavailable
 from .page_text import PageTextFailed, build_page_text_evidence
+from .ocr_review import OcrReviewGate
 
 
 SUPPORTED_SUFFIXES = frozenset({".md", ".txt", ".csv", ".json", ".html", ".htm", ".docx", ".pptx", ".xlsx", ".pdf"})
@@ -88,6 +89,7 @@ class IntakeRequest:
     confirmed_version_of: str | None = None
     page_evidence_mode: str = "off"
     ocr_corrections: Mapping[int, str] = field(default_factory=dict)
+    ocr_correction_approvals: Mapping[int, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not TASK_ID.fullmatch(self.task_id):
@@ -104,6 +106,8 @@ class IntakeRequest:
             raise ValueError("page_evidence_mode is unsupported")
         if any(not isinstance(page, int) or page < 1 or not isinstance(text, str) for page, text in self.ocr_corrections.items()):
             raise ValueError("OCR corrections must map positive page numbers to text")
+        if any(page not in self.ocr_corrections or not isinstance(receipt, str) or not receipt for page, receipt in self.ocr_correction_approvals.items()):
+            raise ValueError("OCR approval receipts must refer to proposed corrections")
 
 
 @dataclass(frozen=True)
@@ -119,10 +123,11 @@ class IntakeResponse:
 class Stage5Intake:
     """只登记 01 或写 02；不做业务资产判断。"""
 
-    def __init__(self, adapter: KnowledgeBaseAdapter, ocr_provider: LocalOcrProvider | None = None, *, ocr_confidence_threshold: float = 0.85) -> None:
+    def __init__(self, adapter: KnowledgeBaseAdapter, ocr_provider: LocalOcrProvider | None = None, *, ocr_confidence_threshold: float = 0.85, ocr_review_gate: OcrReviewGate | None = None) -> None:
         self.adapter = adapter
         self.ocr_provider = ocr_provider
         self.ocr_confidence_threshold = ocr_confidence_threshold
+        self.ocr_review_gate = ocr_review_gate
         self._names: dict[tuple[str, str], str] = {}
 
     def execute(self, request: IntakeRequest) -> IntakeResponse:
@@ -204,6 +209,9 @@ class Stage5Intake:
                     self.ocr_provider,
                     corrections=request.ocr_corrections,
                     confidence_threshold=self.ocr_confidence_threshold,
+                    task_id=request.task_id,
+                    review_gate=self.ocr_review_gate,
+                    correction_approvals=request.ocr_correction_approvals,
                 )
             except OcrUnavailable:
                 evidence["page_text_evidence"] = {"status": "ocr_unavailable"}

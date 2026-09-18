@@ -17,6 +17,7 @@ from .content_source_contract import (
 )
 from .naming import find_obsidian_source_dir, page_file_name, source_original_name, source_readable_name, unique_source_dir
 from .obsidian_stage6 import ObsidianStage6Storage
+from .local_permissions import LIBRARY_DIRECTORY_MODE
 from .templates import ROOT_TITLES, root_content, root_object_kind, template_fingerprint
 
 
@@ -47,7 +48,8 @@ def canonical_obsidian_locator(locator: str) -> str | None:
         current = Path(path.anchor)
         for part in path.parts[1:]:
             current /= part
-            if stat.S_ISLNK(os.lstat(current).st_mode):
+            info = os.lstat(current)
+            if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
                 return None
         return str(path) if stat.S_ISDIR(os.lstat(path).st_mode) else None
     except (OSError, ValueError):
@@ -191,7 +193,7 @@ class ObsidianAdapter:
                 if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
                     return AdapterResult.failed("structure_conflict", "Page evidence directory type is invalid.", blocked=True)
             else:
-                os.mkdir(page_dir, 0o700)
+                os.mkdir(page_dir, LIBRARY_DIRECTORY_MODE)
         except OSError:
             return AdapterResult.failed("write_failed", "Page evidence directory cannot be created safely.")
         name = page_file_name(page.page_number)
@@ -340,7 +342,7 @@ class ObsidianAdapter:
         path = self._root / _ROOT_NAMES[key]
         try:
             if root_object_kind(binding, key) == "directory":
-                os.mkdir(path, 0o700)
+                os.mkdir(path, LIBRARY_DIRECTORY_MODE)
             else:
                 descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
@@ -380,7 +382,7 @@ class ObsidianAdapter:
                 if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
                     return AdapterResult.failed("structure_conflict", "Source directory type is invalid.", blocked=True)
             else:
-                os.mkdir(source_dir, 0o700)
+                os.mkdir(source_dir, LIBRARY_DIRECTORY_MODE)
             self._source_dirs[source.source_id] = source_dir
         except OSError:
             return AdapterResult.failed("write_failed", "Source directory cannot be created safely.")

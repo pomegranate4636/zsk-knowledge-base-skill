@@ -13,6 +13,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import secrets
+import stat
 from typing import Any, Mapping
 from urllib.parse import parse_qsl, urlsplit
 
@@ -99,9 +100,67 @@ def _no_credentials(value: Any, field: str = "locator") -> None:
 def _relative(value: Any, field: str) -> str:
     text = _non_empty(value, field)
     path = PurePosixPath(text)
-    if path.is_absolute() or "\\" in text or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
+    if (text != value or path.as_posix() != text or path.is_absolute() or "\\" in text or ":" in text
+            or not path.parts or any(part in {"", ".", ".."} for part in path.parts)):
         raise ContentSourceContractError(f"{field} must stay below the knowledge-base root")
     return path.as_posix()
+
+
+def _local_contract_bytes(root: Path, relative: str, *, missing_ok: bool = False) -> bytes | None:
+    """Read an explicit local contract without following links or Windows junctions."""
+    relative = _relative(relative, "contract reference")
+    if not root.is_absolute() or ".." in root.parts:
+        raise ContentSourceContractError("knowledge-base root must be absolute")
+    target = root / relative
+    current = Path(target.anchor)
+    try:
+        for part in target.parts[1:]:
+            current /= part
+            info = os.lstat(current)
+            if (stat.S_ISLNK(info.st_mode)
+                    or getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)):
+                raise ContentSourceContractError("contract reference traverses a link or reparse point")
+            expected = stat.S_ISREG if current == target else stat.S_ISDIR
+            if not expected(info.st_mode):
+                raise ContentSourceContractError("contract reference is not an ordinary file path")
+        return target.read_bytes()
+    except FileNotFoundError as exc:
+        if missing_ok:
+            return None
+        raise ContentSourceContractError("referenced contract is missing") from exc
+    except OSError as exc:
+        raise ContentSourceContractError("referenced contract is unreadable") from exc
+
+
+def existing_obsidian_client_id(locator: str) -> str | None:
+    """Preserve a saved identity; an absent pre-contract manifest keeps legacy routing."""
+    root = Path(locator)
+    raw = _local_contract_bytes(root, MANIFEST_RELATIVE_PATH.as_posix(), missing_ok=True)
+    if raw is None:
+        return None
+    try:
+        manifest = validate_manifest(json.loads(raw.decode("utf-8")))
+    except (UnicodeError, ValueError) as exc:
+        raise ContentSourceContractError("saved Manifest is invalid; identity cannot be inferred") from exc
+    if manifest["backend"] != "obsidian" or Path(manifest["locator"]) != root:
+        raise ContentSourceContractError("saved Manifest belongs to another location; explicit relocation is required")
+    return manifest["client_id"]
+
+
+def _local_binding_snapshot(manifest: Mapping[str, Any], manifest_ref: str, profile_index_ref: str) -> tuple[tuple[str, str], ...]:
+    root = Path(manifest["locator"])
+    if profile_index_ref != manifest["profile_index_ref"]:
+        raise ContentSourceContractError("Profile index reference differs from the Manifest")
+    raw_manifest = _local_contract_bytes(root, manifest_ref)
+    raw_index = _local_contract_bytes(root, profile_index_ref)
+    try:
+        if validate_manifest(json.loads(raw_manifest.decode("utf-8"))) != dict(manifest):
+            raise ContentSourceContractError("referenced Manifest differs from the preview input")
+        validate_profile_index(json.loads(raw_index.decode("utf-8")), expected_knowledge_base_id=manifest["knowledge_base_id"])
+    except (UnicodeError, ValueError) as exc:
+        raise ContentSourceContractError("referenced contracts are invalid or belong to another knowledge base") from exc
+    return ((manifest_ref, hashlib.sha256(raw_manifest).hexdigest()),
+            (profile_index_ref, hashlib.sha256(raw_index).hexdigest()))
 
 
 def build_base_manifest(
@@ -294,8 +353,9 @@ def validate_registry(value: Any) -> dict[str, Any]:
         if not isinstance(binding["locator"], dict) or not binding["locator"]:
             raise ContentSourceContractError("registry locator is invalid")
         _no_credentials(binding["locator"])
-        _non_empty(binding["manifest_ref"], "manifest_ref")
-        _non_empty(binding["profile_index_ref"], "profile_index_ref")
+        reference_validator = _relative if binding["backend"] == "obsidian" else _non_empty
+        reference_validator(binding["manifest_ref"], "manifest_ref")
+        reference_validator(binding["profile_index_ref"], "profile_index_ref")
         workflows = binding["supported_workflows"]
         if not isinstance(workflows, list) or len(workflows) != len(set(workflows)) or set(workflows) - SUPPORTED_WORKFLOWS:
             raise ContentSourceContractError("binding workflows are invalid")
@@ -332,6 +392,7 @@ class RegistryPlan:
     confirmation: str
     action: str
     registry_before_sha256: str | None
+    contract_snapshot: tuple[tuple[str, str], ...] = ()
 
 
 def plan_registry_binding(
@@ -344,6 +405,11 @@ def plan_registry_binding(
     default_profiles: Mapping[str, str | None] | None = None,
 ) -> RegistryPlan:
     checked_manifest = validate_manifest(dict(manifest))
+    contract_snapshot = ()
+    if checked_manifest["backend"] == "obsidian":
+        manifest_ref = _relative(manifest_ref, "manifest_ref")
+        profile_index_ref = _relative(profile_index_ref, "profile_index_ref")
+        contract_snapshot = _local_binding_snapshot(checked_manifest, manifest_ref, profile_index_ref)
     if not workflows or len(workflows) != len(set(workflows)) or set(workflows) - set(checked_manifest["supported_workflows"]):
         raise ContentSourceContractError("requested workflows are invalid")
     path = Path(registry_path) if registry_path is not None else default_registry_path()
@@ -400,16 +466,22 @@ def plan_registry_binding(
         "registry_path": str(path),
         "binding": binding,
         "workflow_defaults_after": updated["workflow_defaults"],
+        "contract_snapshot": contract_snapshot,
         "wrote": False,
     }
     digest = sha256_json(preview)
     confirmation = hashlib.sha256(("content-source-v1-confirm\0" + digest).encode("utf-8")).hexdigest()[:24]
-    return RegistryPlan(path, updated, binding_id, digest, confirmation, action, registry_before_sha256)
+    return RegistryPlan(path, updated, binding_id, digest, confirmation, action, registry_before_sha256, contract_snapshot)
 
 
 def commit_registry_plan(plan: RegistryPlan, confirmation: str) -> dict[str, Any]:
     if confirmation != plan.confirmation:
         raise ContentSourceContractError("confirmation does not match the zero-write preview")
+    binding = plan.registry["bindings"][plan.binding_id]
+    for reference, expected_digest in plan.contract_snapshot:
+        raw_contract = _local_contract_bytes(Path(binding["locator"]["vault_root"]), reference)
+        if hashlib.sha256(raw_contract).hexdigest() != expected_digest:
+            raise ContentSourceContractError("knowledge-base contract changed after preview")
     current = None
     if plan.registry_path.exists():
         if plan.registry_path.is_symlink() or not plan.registry_path.is_file():

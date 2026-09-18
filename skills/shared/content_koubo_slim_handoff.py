@@ -374,6 +374,12 @@ def _frontmatter(path: Path, label: str) -> dict[str, Any]:
     try:
         with path.open("r", encoding="utf-8", newline=None) as handle:
             first = handle.readline()
+            # Match Content's Feishu reader: allow one H1 title before frontmatter,
+            # but never search arbitrary body text for metadata.
+            if re.fullmatch(r"#[ \t]+[^\n]+\n?", first):
+                first = handle.readline()
+                while first and not first.strip():
+                    first = handle.readline()
             if first.rstrip("\n") != "---":
                 raise ContentKouboSlimHandoffError(
                     "frontmatter_missing", f"{label}缺少 frontmatter：{path}"
@@ -429,6 +435,29 @@ def _frontmatter(path: Path, label: str) -> dict[str, Any]:
     return metadata
 
 
+def _source_prohibited(metadata: dict[str, Any]) -> bool:
+    prohibited = {
+        "archived", "rejected", "disabled", "deprecated",
+        "blocked", "do_not_use", "forbidden",
+    }
+    if metadata.get("do_not_use") is True:
+        return True
+    for key in (
+        "status", "usage_policy", "usage_scope", "maturity",
+        "source_verification", "claim_scope",
+    ):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip().casefold() in prohibited:
+            return True
+        if (
+            isinstance(value, dict)
+            and isinstance(value.get("status"), str)
+            and value["status"].strip().casefold() in prohibited
+        ):
+            return True
+    return False
+
+
 def _asset_counts(method_root: Path, profile_root: Path) -> tuple[int, int, int]:
     compatible = 0
     skipped = 0
@@ -445,11 +474,13 @@ def _asset_counts(method_root: Path, profile_root: Path) -> tuple[int, int, int]
             and metadata.get("type") in {
                 "benchmark_deconstruction",
                 "peer_content_asset",
+                "viral_template_deconstruction",
                 "oral_structure",
                 "oral_method_asset",
                 "content_method_asset",
             }
             and metadata.get("status") == "active"
+            and not _source_prohibited(metadata)
             and metadata.get("audience_scope") in {
                 "consumer",
                 "internal_sales_training",
@@ -468,7 +499,7 @@ def _asset_counts(method_root: Path, profile_root: Path) -> tuple[int, int, int]
                 for item in metadata["use_when"]
             )
             and (
-                metadata.get("type") != "content_method_asset"
+                metadata.get("applicable_workflows") is None
                 or isinstance(metadata.get("applicable_workflows"), list)
                 and "content-koubo-slim" in metadata["applicable_workflows"]
             )
@@ -618,7 +649,7 @@ def _ensure_directory(path: Path, created: list[Path]) -> None:
         )
     for directory in reversed(missing):
         try:
-            os.mkdir(directory, 0o700)
+            os.mkdir(directory, 0o777 if os.name == "nt" else 0o700)
         except OSError as exc:
             raise ContentKouboSlimHandoffError(
                 "write_failed", f"无法创建目录：{directory}"

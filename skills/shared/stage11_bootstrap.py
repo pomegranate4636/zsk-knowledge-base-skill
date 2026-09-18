@@ -26,6 +26,7 @@ from .oral_structure_preset import OralStructurePreset, PresetError, load_preset
 from .oral_structure_install import install_feishu_preset, install_obsidian_preset
 from .stage2_router import RouterRequest, Stage2Router, classify_intent
 from .templates import TEMPLATE_VERSION
+from .local_permissions import LIBRARY_DIRECTORY_MODE
 
 
 @dataclass(frozen=True)
@@ -139,7 +140,7 @@ class FirstRunBootstrap:
 
     def _create_obsidian(self, client_name: str, name: str, target: Path, preset: OralStructurePreset) -> BootstrapResponse:
         try:
-            os.mkdir(target, 0o700)
+            os.mkdir(target, LIBRARY_DIRECTORY_MODE)
         except OSError:
             return BootstrapResponse("blocked", "write_failed", "Obsidian 目标目录无法创建。", {"backend": "obsidian", "name": name, "target": str(target)}, None, None)
         binding = Binding(BINDING_SCHEMA, self._client_id(f"obsidian:{target}"), client_name, name, "company", "obsidian", str(target), {key: f"root:{key}" for key in ROOT_KEYS}, TEMPLATE_VERSION)

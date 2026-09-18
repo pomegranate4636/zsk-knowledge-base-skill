@@ -124,7 +124,7 @@ class AutoOcrProvider:
         *,
         agreement_threshold: float = 0.92,
     ) -> None:
-        if not 0.0 <= agreement_threshold <= 1.0:
+        if not 0.92 <= agreement_threshold <= 1.0:
             raise ValueError("OCR agreement threshold is invalid")
         self.providers = tuple(providers or tuple(TesseractOcrProvider(page_segmentation_mode=mode) for mode in (3, 6, 11)))
         if len(self.providers) < 2:
