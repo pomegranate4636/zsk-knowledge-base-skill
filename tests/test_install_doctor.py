@@ -40,6 +40,17 @@ class InstallDoctorTests(unittest.TestCase):
             self.assertNotIn("shared", present)
             self.assertIn("shared", missing)
 
+    def test_each_new_runtime_module_is_required_by_install_checks(self):
+        import shutil
+        for name in ("ocr_review.py", "local_permissions.py"):
+            with self.subTest(module=name), tempfile.TemporaryDirectory() as folder:
+                package = Path(folder) / "package"
+                shutil.copytree(ROOT, package, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+                (package / "skills" / "shared" / name).unlink()
+                self.assertIn("shared", install.installed_state(package / "skills")[1])
+                self.assertTrue(any(name in error for error in install.validate_source(package / "skills")))
+                self.assertTrue(any(name in error for error in install.validate_package(package)))
+
     def test_source_requires_the_markdown_converter(self) -> None:
         self.assertEqual(install.validate_source(ROOT / "skills"), [])
 

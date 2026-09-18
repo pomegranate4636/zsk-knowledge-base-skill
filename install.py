@@ -51,6 +51,8 @@ SHARED_REQUIRED_FILES = (
     "oral_structure_install.py",
     "oral_structure_preset.py",
     "ocr_provider.py",
+    "ocr_review.py",
+    "local_permissions.py",
     "page_renderer.py",
     "page_text.py",
     "stage11_bootstrap.py",
